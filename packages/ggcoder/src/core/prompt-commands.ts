@@ -14,102 +14,154 @@ export const PROMPT_COMMANDS: PromptCommand[] = [
   {
     name: "scan",
     aliases: [],
-    description: "Find dead code, bugs, and security issues",
-    prompt: `Find quick wins in this codebase. Spawn 5 sub-agents in parallel using the subagent tool (call the subagent tool 5 times in a single response, each with a different task), each focusing on one area. Adapt each area to what's relevant for THIS project's stack and architecture.
+    description: "Find confirmed dead code only",
+    prompt: `# Scan: Confirmed Dead Code Review
 
-**Agent 1 - Performance**: Inefficient algorithms, unnecessary work, missing early returns, blocking operations, things that scale poorly
+Find dead code in this codebase. Do not look for bugs, security issues, performance issues, style issues, or refactors. This command is report-first: do not edit or delete anything until the user chooses an option at the end.
 
-**Agent 2 - Dead Weight**: Unused code, unreachable paths, stale comments/TODOs, obsolete files, imports to nowhere
+## Phase 1: Parallel dead-code search
 
-**Agent 3 - Lurking Bugs**: Unhandled edge cases, missing error handling, resource leaks, race conditions, silent failures
+Spawn exactly 3 sub-agents in parallel using the subagent tool (call the subagent tool 3 times in a single response), each with a different validation angle:
 
-**Agent 4 - Security**: Hardcoded secrets, injection risks, exposed sensitive data, overly permissive access, unsafe defaults
+**Agent 1 - Static Reachability**: Check exports, imports, call sites, route registration, command registration, component usage, tests, package entrypoints, and public API surfaces. Identify candidates only when references appear absent or unreachable.
 
-**Agent 5 - Dependencies & Config**: Unused packages, vulnerable dependencies, misconfigured settings, dead environment variables, orphaned config files
+**Agent 2 - Runtime & Dynamic Usage**: Check dynamic loading, reflection, string-based references, plugin systems, CLI commands, routes, config keys, generated-code hooks, framework conventions, side-effect imports, and files used outside TypeScript import graphs.
 
-## The Only Valid Findings
+**Agent 3 - Historical & Boundary Safety**: Check git history, package manifests, build configs, docs, examples, scripts, CI, release artifacts, and external-facing filenames/API names that may be consumed by users even if unused internally.
 
-A finding is ONLY valid if it falls into one of these categories:
+Each sub-agent must return only candidates with file:line ranges, estimated line counts, validation evidence, and reasons removal may be unsafe. Finding nothing is valid.
 
-1. **Dead** - Code that literally does nothing. Unused, unreachable, no-op.
-2. **Broken** - Will cause errors, crashes, or wrong behavior. Not "might" - WILL.
-3. **Dangerous** - Security holes, data exposure, resource exhaustion.
+## Phase 2: Main-agent validation
 
-That's it. Three categories. If it doesn't fit, don't report it.
+For every candidate, validate it yourself before reporting it:
 
-**NOT valid findings:**
-- "This works but could be cleaner" - NO
-- "Modern best practice suggests..." - NO
-- "This is verbose/repetitive but functional" - NO
-- "You could use X instead of Y" - NO
-- "This isn't how I'd write it" - NO
+1. Search for references with grep/find and language-aware patterns where possible.
+2. Check exports and package/public entrypoints before marking anything removable.
+3. Check framework conventions and dynamic lookup risks before marking anything removable.
+4. Check whether removing it would change public API, CLI behavior, routes, config support, migration behavior, generated artifacts, docs examples, tests, or side effects.
+5. If evidence is incomplete, mark safety as Low or drop the finding.
 
-If the code works, isn't dangerous, and does something - leave it alone.
+## What counts as dead code
 
-## Output Format
+Report only code that is validated as one of:
 
-For each finding:
-\`\`\`
-[DEAD/BROKEN/DANGEROUS] file:line - What it is
-Impact: What happens if left unfixed
-\`\`\`
+- **Unused file**: no imports, no entrypoint references, no dynamic/framework usage, no public/exported contract.
+- **Unused export**: exported but not referenced internally or by package entrypoints, and not part of documented/public API.
+- **Unreachable branch**: condition/path cannot execute based on current code and config.
+- **Obsolete artifact**: stale script/config/example/generated artifact no longer referenced by build, docs, package manifests, or CI.
+- **No-op code**: code executes but has no observable effect and no intentional placeholder/documentation purpose.
 
-Finding nothing is a valid outcome. Most codebases don't have easy wins - that's fine.`,
+Do not report:
+- Public APIs, package exports, CLI commands, routes, config keys, migrations, docs examples, tests, generated-code integration points, or plugin hooks unless you can prove they are obsolete.
+- Code only unused in the current test suite.
+- Code that might be used through strings, framework conventions, side effects, or external consumers.
+- Anything you are not confident is safe to remove.
+
+## Safety labels
+
+- **High**: Strong evidence from static references, entrypoints, configs, docs, tests, and dynamic-use checks; removal is likely safe.
+- **Medium**: Probably dead, but one boundary or dynamic-use risk remains; remove only with targeted verification.
+- **Low**: Suspicious but not proven; do not remove without more investigation.
+
+## Final output
+
+Output one concise table, prioritized by safety and impact. No prose before the table.
+
+| Priority | Location | Lines | Dead-code type | Evidence | Safety to remove | Recommended action |
+|---|---|---:|---|---|---|---|
+| P0/P1/P2/P3 | file:line-line | N | unused file/export/branch/artifact/no-op | one sentence | High/Medium/Low | Remove / Investigate / Keep |
+
+Priority guide:
+- **P0**: High-safety removal with meaningful line or complexity reduction.
+- **P1**: High-safety small removal, or Medium-safety meaningful cleanup.
+- **P2**: Medium-safety small cleanup; needs targeted verification.
+- **P3**: Low-safety candidate; keep unless user wants deeper investigation.
+
+Rules:
+- Put High safety rows first, then Medium, then Low.
+- Keep each table cell short.
+- If no confirmed dead code is found, output one row saying none found and set action to \`Keep\`.
+- Do not recommend deletion for Low-safety rows.
+
+After the table, ask exactly:
+
+What should I do?
+A) Remove all High-safety dead code
+B) Remove only top priorities
+C) Skip
+
+Do not start deleting or editing until the user chooses.`,
   },
   {
     name: "verify",
     aliases: [],
-    description: "Verify code against docs and best practices",
-    prompt: `Verify this codebase against current best practices and official documentation. Spawn 8 sub-agents in parallel using the subagent tool (call the subagent tool 8 times in a single response, each with a different task), each focusing on one category. Each agent must VERIFY findings using real code samples or official docs - no assumptions allowed.
+    description: "Review this codebase against real-world implementations",
+    prompt: `# Verify: Codebase Real-World Check
 
-**Agent 1 - Core Framework**: Detect the main framework, verify usage patterns against official documentation
+Review this codebase's implementation against real-world code, not opinions. Start with changes from this conversation or \`git diff\` / \`git status\`; if there are no relevant changes, choose the most important implemented feature or module in the current project and review that.
 
-**Agent 2 - Dependencies/Libraries**: Check if library APIs being used are current or deprecated. Verify against library documentation
+## Phase 1: Parallel codebase review
 
-**Agent 3 - Language Patterns**: Identify the primary language, verify idioms and patterns are current
+Spawn exactly 3 sub-agents in parallel using the subagent tool (call the subagent tool 3 times in a single response), each with a different focus:
 
-**Agent 4 - Configuration**: Examine build tools, bundlers, linters, and config files. Verify settings against current tool documentation
+**Agent 1 - Implementation Shape**: Identify the main APIs, components, functions, file structure, state flow, and integration points. Return only concrete search anchors and candidate concerns.
 
-**Agent 5 - Security Patterns**: Review auth, data handling, secrets management. Verify against current security guidance and OWASP recommendations
+**Agent 2 - Completeness**: Check whether the implementation appears to miss expected pieces: edge cases, cleanup, error states, validation, tests, configuration, accessibility, migrations, docs, or lifecycle handling. Return only concrete candidate gaps.
 
-**Agent 6 - Testing**: Identify test framework in use, verify testing patterns match current library recommendations
+**Agent 3 - Divergence**: Look for unusual patterns, over-custom code, reinvented utilities, brittle abstractions, or choices that may differ from how mature projects solve the same problem. Return only concrete candidate divergences.
 
-**Agent 7 - API/Data Handling**: Review data fetching, state management, storage patterns. Verify against current patterns and framework docs
+Each sub-agent must include file:line references and suggested literal search anchors for kencode search, such as imports, function names, hooks, props, config keys, or API calls. Do not report subjective style preferences.
 
-**Agent 8 - Error Handling**: Examine error handling patterns, verify they match library documentation
+## Phase 2: Real-world comparison with kencode search
 
-## Agent Workflow
+After the 3 agents return, use \`mcp__kencode-search__searchCode\` yourself to verify or reject their candidates.
 
-Each agent MUST follow this process:
-1. **Identify** - What's relevant in THIS project for your category
-2. **Find** - Locate specific implementations in the codebase
-3. **Verify** - Check against real code or official docs
-4. **Report** - Only report when verified current practice differs from codebase
+Search rules:
+- Use literal code tokens, not conceptual phrases.
+- Prefer imports, framework identifiers, config keys, hook names, component names, and API calls from this codebase.
+- Use \`peek: true\` first when exploring, then fetch narrowed examples with repo/path filters when useful.
+- Compare against multiple real repositories when possible; one repo is weak evidence unless it is an official or canonical implementation.
+- If kencode search is unavailable or returns insufficient evidence, say that in the Evidence column and lower confidence.
 
-## The Only Valid Findings
+## What to classify
 
-A finding is ONLY valid if:
-1. **OUTDATED** - Works but uses old patterns with verified better alternatives
-2. **DEPRECATED** - Uses APIs marked deprecated in current official docs
-3. **INCORRECT** - Implementation contradicts official documentation
+Report only findings that fit one of these:
 
-**NOT valid findings:**
-- "I think there's a better way" without verification - NO
-- "This looks old" without proof - NO
-- Style preferences or subjective improvements - NO
-- Anything not verified via real code or official docs - NO
+1. **Aligned** - The implementation matches consistent real-world practice. No action needed.
+2. **Missing** - Real-world implementations consistently include something this code lacks.
+3. **Divergent** - This code differs from common implementations in a way that likely matters.
+4. **Better Elsewhere** - Real-world implementations solve the same problem more robustly or simply, with evidence.
 
-## Output Format
+Drop anything that is only taste, personal preference, or unsupported by code evidence.
 
-For each finding:
-\`\`\`
-[OUTDATED/DEPRECATED/INCORRECT] file:line - What it is
-Current: How it's implemented now
-Verified: What the correct/current approach is
-Source: URL to official docs or evidence
-\`\`\`
+## Final output
 
-No findings is a valid outcome. If implementations match current practices, that's good news.`,
+Output one concise table, prioritized by impact. No prose before the table.
+
+| Priority | Type | Location | Finding | Evidence | Recommended action |
+|---|---|---|---|---|---|
+| P0/P1/P2/P3 | Missing/Divergent/Better Elsewhere/Aligned | file:line | one sentence | kencode evidence in one sentence | concrete action or \`None\` |
+
+Priority guide:
+- **P0**: likely bug, data loss, security risk, or broken integration.
+- **P1**: important missing behavior or maintainability risk.
+- **P2**: useful improvement backed by real-world evidence.
+- **P3**: aligned/no-action observations.
+
+Rules:
+- Keep each table cell short.
+- Put action-taking findings before aligned findings.
+- If everything is aligned, output only aligned rows and set every action to \`None\`.
+- If there is not enough evidence for any finding, output one row explaining that verification was inconclusive.
+
+After the table, ask exactly:
+
+Which should I do?
+A) Refine and adjust all
+B) Just top priorities
+C) Skip
+
+Do not start fixing until the user chooses.`,
   },
   {
     name: "bullet-proof",
