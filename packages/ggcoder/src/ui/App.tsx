@@ -3490,6 +3490,7 @@ export function App(props: AppProps) {
                 runStartRef={agentLoop.runStartRef}
                 thinkingMs={agentLoop.thinkingMs}
                 isThinking={agentLoop.isThinking}
+                thinkingEnabled={thinkingEnabled}
                 tokenEstimate={agentLoop.streamedTokenEstimate}
                 charCountRef={agentLoop.charCountRef}
                 realTokensAccumRef={agentLoop.realTokensAccumRef}

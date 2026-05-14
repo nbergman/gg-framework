@@ -476,6 +476,8 @@ export function useAgentLoop(
                 break;
 
               case "thinking_delta":
+                if (!options.thinking) break;
+
                 if (firstThinkingArrivedMs < 0) {
                   firstThinkingArrivedMs = Date.now() - runStartRef.current;
                   log("INFO", "ui", "first_thinking_arrived", {
