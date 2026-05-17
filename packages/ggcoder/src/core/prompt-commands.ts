@@ -86,11 +86,13 @@ Rules:
 After the table, ask exactly:
 
 What should I do?
-A) Remove all High-safety dead code
-B) Remove only top priorities
+A) Create tasks to remove all High-safety dead code
+B) Create tasks to remove only top priorities
 C) Skip
 
-Do not start deleting or editing until the user chooses.`,
+Do not start deleting or editing until the user chooses.
+
+If the user chooses A or B, do not remove code directly. Instead, use the tasks tool to create one task per selected removal or tightly coupled removal group, ordered by dependency and risk. Each task prompt must be standalone and include the exact locations, safety evidence, reference-search requirements, removal instructions, project verification commands, and instructions to compare with kencode search before marking the task complete. After creating tasks, tell the user exactly: "Tasks created. Press CTRL + T to open the Tasks Pane and press R to run all tasks." Do not begin executing them unless the user explicitly starts a task.`,
   },
   {
     name: "verify",
@@ -157,11 +159,13 @@ Rules:
 After the table, ask exactly:
 
 Which should I do?
-A) Refine and adjust all
-B) Just top priorities
+A) Create tasks to refine and adjust all
+B) Create tasks for just top priorities
 C) Skip
 
-Do not start fixing until the user chooses.`,
+Do not start fixing until the user chooses.
+
+If the user chooses A or B, do not fix directly. Instead, use the tasks tool to create one task per selected finding or tightly coupled finding group, ordered by dependency and priority. Each task prompt must be standalone and include the finding, affected local files/anchors, kencode evidence from the report, instructions to compare the approach with kencode search before editing, implementation instructions, project verification commands, and instructions to compare the final implementation with kencode search again before marking the task complete. After creating tasks, tell the user exactly: "Tasks created. Press CTRL + T to open the Tasks Pane and press R to run all tasks." Do not begin executing them unless the user explicitly starts a task.`,
   },
   {
     name: "expand",
@@ -261,12 +265,26 @@ Rules:
 After the tables, ask exactly:
 
 What should I do?
-A) Add all P0/P1 gaps
-B) Add only the top priority gap from each category
+A) Create tasks for all P0/P1 gaps
+B) Create tasks for only the top priority gap from each category
 C) Create an implementation plan first
 D) Skip
 
-Do not start implementing until the user chooses.`,
+Do not start implementing until the user chooses.
+
+If the user chooses A, B, or C, do not implement gaps or write the plan directly. Instead, use the tasks tool:
+
+- For A or B: create one implementation task per selected gap, ordered by dependency and priority.
+- For C: create one planning task that produces the implementation plan, with enough source evidence and local anchors to be standalone.
+
+Each task prompt must be standalone and include:
+
+1. The specific gap or planning scope, including relevant local files/anchors and source evidence from the /expand report.
+2. Instructions to compare the implementation approach with kencode search before editing, using literal code tokens and current real-world examples.
+3. Instructions to implement the gap or plan the implementation in the local codebase.
+4. Instructions to verify correctness after implementation by running project checks and by comparing the final implementation with kencode search again before marking the task complete. For planning tasks, require kencode-backed implementation references in the plan.
+
+After creating tasks, tell the user exactly: "Tasks created. Press CTRL + T to open the Tasks Pane and press R to run all tasks." Do not begin executing them unless the user explicitly starts a task.`,
   },
   {
     name: "bullet-proof",
@@ -403,12 +421,14 @@ Threat model: [from recon]
 After the report, ask:
 
 > Which (if any) should I fix? Options:
-> - A) All Critical + High
-> - B) Pick specific findings (give IDs, e.g. "BP-001, BP-004")
-> - C) Pick category (auth, supply chain, secrets, …)
+> - A) Create tasks for all Critical + High
+> - B) Create tasks for specific findings (give IDs, e.g. "BP-001, BP-004")
+> - C) Create tasks for a category (auth, supply chain, secrets, …)
 > - D) None — report only
 
 **Do not start fixing until the user picks.**
+
+If the user chooses A, B, or C, do not fix directly. Instead, use the tasks tool to create one task per selected finding or tightly coupled finding group, ordered by severity, exploitability, and dependency. Each task prompt must be standalone and include the finding ID, vulnerability scenario, affected local files/anchors, concrete remediation, instructions to compare security-sensitive implementation details with kencode search or authoritative docs before editing, project verification commands, and instructions to compare the final fix with kencode search or authoritative docs again before marking the task complete. After creating tasks, tell the user exactly: "Tasks created. Press CTRL + T to open the Tasks Pane and press R to run all tasks." Do not begin executing them unless the user explicitly starts a task.
 
 ## Threat reference (May 2026)
 
@@ -1283,15 +1303,16 @@ At the end:
 <N> gaps in hygiene, <N> in tooling, <N> in verify pipeline, <N> in style-pack alignment.
 
 Which (if any) would you like me to fix? Options:
-- A) All [GAP] items that are safe + additive (no overwrites)
-- B) Pick category: hygiene / tooling / verify / style-pack alignment
-- C) Specific items — tell me which
+- A) Create tasks for all [GAP] items that are safe + additive (no overwrites)
+- B) Create tasks for a category: hygiene / tooling / verify / style-pack alignment
+- C) Create tasks for specific items — tell me which
 - D) None — just the report
 \`\`\`
 
 ## Rules
 
 - **Report only.** No edits, no installs, no commits without explicit user confirmation after the report.
+- **Task handoff for fixes.** If the user chooses A, B, or C, do not fix directly. Use the tasks tool to create one standalone task per selected gap or tightly coupled gap group. Each task must include the gap, affected files/configs, safe-additive constraints, implementation instructions, project verification commands, and instructions to compare with kencode search before marking the task complete. After creating tasks, tell the user exactly: "Tasks created. Press CTRL + T to open the Tasks Pane and press R to run all tasks." Do not begin executing them unless the user explicitly starts a task.
 - **No code refactors recommended.** This audit is about scaffolding/tooling, not code review. Use \`/scan\` or \`/verify\` for code-level findings.
 - **No dependency installations in the report.** Listing them as observations is fine; recommending installation is not — that's the user's call.
 - **Skip empty categories.** If a category has no findings, omit it.
