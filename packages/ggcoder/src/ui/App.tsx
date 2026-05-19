@@ -12,7 +12,7 @@ import {
   navigateTaskBar,
   killTask,
 } from "./stores/taskbar-store.js";
-import crypto, { createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -64,7 +64,11 @@ import {
 import { useTerminalTitle } from "./hooks/useTerminalTitle.js";
 import { getGitBranch } from "../utils/git.js";
 import { getModel, getContextWindow, getMaxThinkingLevel } from "../core/model-registry.js";
-import { SessionManager, type MessageEntry } from "../core/session-manager.js";
+import { SessionManager } from "../core/session-manager.js";
+import {
+  appendMessagesToSession as appendSessionMessages,
+  createCompactedSessionCheckpoint,
+} from "../core/session-compaction.js";
 import { log } from "../core/logger.js";
 import {
   getPendingUpdate,
@@ -1121,25 +1125,47 @@ export function App(props: AppProps) {
     }
   }, [props.onExitPlanRef, replaceSystemPrompt, stdout]);
 
+  const appendMessagesToSession = useCallback(
+    async (sessionPath: string, messages: readonly Message[], startIndex: number) => {
+      const sm = sessionManagerRef.current;
+      if (!sm) return;
+      await appendSessionMessages(sm, sessionPath, messages, startIndex);
+    },
+    [],
+  );
+
+  const persistCompactedSession = useCallback(
+    async (compactedMessages: readonly Message[]): Promise<void> => {
+      const sm = sessionManagerRef.current;
+      if (!sm) return;
+      const session = await createCompactedSessionCheckpoint(sm, {
+        cwd: cwdRef.current,
+        provider: currentProvider,
+        model: currentModel,
+        messages: compactedMessages,
+      });
+      sessionPathRef.current = session.path;
+      persistedIndexRef.current = compactedMessages.length;
+      if (sessionStore) {
+        sessionStore.sessionPath = session.path;
+        sessionStore.messages = [...compactedMessages];
+      }
+      log("INFO", "compaction", "Persisted compacted session checkpoint", { path: session.path });
+    },
+    [currentModel, currentProvider, sessionStore],
+  );
+
   const persistNewMessages = useCallback(async () => {
-    const sm = sessionManagerRef.current;
     const sp = sessionPathRef.current;
-    if (!sm || !sp) return;
+    if (!sp) return;
     const allMsgs = messagesRef.current;
-    for (let i = persistedIndexRef.current; i < allMsgs.length; i++) {
-      const msg = allMsgs[i];
-      if (msg.role === "system") continue;
-      const entry: MessageEntry = {
-        type: "message",
-        id: crypto.randomUUID(),
-        parentId: null,
-        timestamp: new Date().toISOString(),
-        message: msg,
-      };
-      await sm.appendEntry(sp, entry);
-    }
+    await appendMessagesToSession(sp, allMsgs, persistedIndexRef.current);
     persistedIndexRef.current = allMsgs.length;
-  }, []);
+    if (sessionStore) {
+      sessionStore.messages = [...allMsgs];
+      sessionStore.sessionPath = sp;
+    }
+  }, [appendMessagesToSession, sessionStore]);
 
   /**
    * Run the language detector against the current cwd. If the detected set is a
@@ -1335,6 +1361,10 @@ export function App(props: AppProps) {
       // Force-compact on context overflow regardless of settings
       if (options?.force) {
         const result = await compactConversation(stripped);
+        if (result !== stripped) {
+          messagesRef.current = result;
+          await persistCompactedSession(result);
+        }
         lastCompactionTimeRef.current = Date.now();
         return injectRepoMapContext(result);
       }
@@ -1355,6 +1385,10 @@ export function App(props: AppProps) {
         lastActualTokensRef.current > 0 && tokensFresh ? lastActualTokensRef.current : undefined;
       if (shouldCompact(stripped, contextWindow, threshold, actualTokens, reserveTokens)) {
         const result = await compactConversation(stripped);
+        if (result !== stripped) {
+          messagesRef.current = result;
+          await persistCompactedSession(result);
+        }
         lastCompactionTimeRef.current = Date.now();
         return injectRepoMapContext(result);
       }
@@ -1365,6 +1399,7 @@ export function App(props: AppProps) {
       compactConversation,
       contextWindowOptions,
       injectRepoMapContext,
+      persistCompactedSession,
       stripRepoMapMessages,
     ],
   );
@@ -2250,7 +2285,7 @@ export function App(props: AppProps) {
         const compacted = await compactConversation(messagesRef.current);
         if (compacted !== messagesRef.current) {
           messagesRef.current = compacted;
-          persistedIndexRef.current = 0; // Re-persist after compaction
+          await persistCompactedSession(compacted);
         }
         return;
       }

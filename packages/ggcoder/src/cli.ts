@@ -72,6 +72,11 @@ import { buildSystemPrompt } from "./system-prompt.js";
 import { isEyesActive, journalCount } from "@kenkaiiii/ggcoder-eyes";
 import { createTools } from "./tools/index.js";
 import { shouldCompact, compact } from "./core/compaction/compactor.js";
+import {
+  createCompactedSessionCheckpoint,
+  formatRestoreInfoText,
+  getRestoredMessagesForDisplay,
+} from "./core/session-compaction.js";
 import { setEstimatorModel } from "./core/compaction/token-estimator.js";
 import { getContextWindow, getDefaultModel, getMaxThinkingLevel } from "./core/model-registry.js";
 import { MCPClientManager, getMCPServers } from "./core/mcp/index.js";
@@ -723,19 +728,30 @@ async function runInkTUI(opts: {
             baseUrl: cached.baseUrl,
             contextWindow,
           });
-          // Replace messages array contents with compacted messages
+          // Persist compacted continuation to a fresh session so future
+          // `ggcoder continue` starts from the compacted checkpoint instead
+          // of repeatedly restoring the oversized source session.
+          const compactedSession = await createCompactedSessionCheckpoint(sessionManager, {
+            cwd,
+            provider,
+            model,
+            messages: compacted.messages,
+          });
+          sessionPath = compactedSession.path;
           messages.length = 0;
           messages.push(...compacted.messages);
           log("INFO", "session", `Auto-compaction complete`, {
             before: String(compacted.result.originalCount),
             after: String(compacted.result.newCount),
+            path: sessionPath,
           });
         }
 
-        initialHistory = messagesToHistoryItems(loadedMessages);
+        const restoredMessages = getRestoredMessagesForDisplay(messages);
+        initialHistory = messagesToHistoryItems(restoredMessages);
         initialHistory.push({
           kind: "info",
-          text: `↻ Restored session (${loadedMessages.length} messages)`,
+          text: formatRestoreInfoText(loadedMessages.length, restoredMessages.length),
           id: `restore-info`,
         });
       }
