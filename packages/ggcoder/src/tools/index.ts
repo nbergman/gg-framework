@@ -14,6 +14,7 @@ import { createSourcePathTool } from "./source-path.js";
 import { createTaskOutputTool } from "./task-output.js";
 import { createTaskStopTool } from "./task-stop.js";
 import { createTasksTool } from "./tasks.js";
+import { createGoalsTool } from "./goals.js";
 import { createSkillTool } from "./skill.js";
 import { createEnterPlanTool } from "./enter-plan.js";
 import { createExitPlanTool } from "./exit-plan.js";
@@ -74,6 +75,7 @@ export function createTools(cwd: string, opts?: CreateToolsOptions): CreateTools
     createTaskOutputTool(processManager),
     createTaskStopTool(processManager),
     createTasksTool(cwd),
+    createGoalsTool(cwd),
   ];
 
   // Add web search tool for providers without reliable native web search
@@ -122,6 +124,7 @@ export { createSourcePathTool } from "./source-path.js";
 export { createTaskOutputTool } from "./task-output.js";
 export { createTaskStopTool } from "./task-stop.js";
 export { createTasksTool } from "./tasks.js";
+export { createGoalsTool } from "./goals.js";
 export { createSkillTool } from "./skill.js";
 export { createEnterPlanTool } from "./enter-plan.js";
 export { createExitPlanTool } from "./exit-plan.js";

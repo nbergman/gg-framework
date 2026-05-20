@@ -203,6 +203,7 @@ interface InputAreaProps {
   onDownAtEnd?: () => void;
   onShiftTab?: () => void;
   onToggleTasks?: () => void;
+  onToggleGoal?: () => void;
   onToggleSkills?: () => void;
   onTogglePixel?: () => void;
   onTogglePlanMode?: () => void;
@@ -291,6 +292,7 @@ export function InputArea({
   onDownAtEnd,
   onShiftTab,
   onToggleTasks,
+  onToggleGoal,
   onToggleSkills,
   onTogglePixel,
   onTogglePlanMode,
@@ -835,6 +837,12 @@ export function InputArea({
       // Ctrl+T toggles task overlay — works even while agent is running
       if (key.ctrl && input === "t") {
         onToggleTasks?.();
+        return;
+      }
+
+      // Ctrl+G toggles goal overlay in normal input mode. In search mode it cancels search above.
+      if (key.ctrl && input === "g") {
+        onToggleGoal?.();
         return;
       }
 

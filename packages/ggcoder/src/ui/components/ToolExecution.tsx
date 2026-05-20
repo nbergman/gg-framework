@@ -70,6 +70,7 @@ type ToolExecutionProps = ToolRunningProps | ToolDoneProps;
 
 /** Tools that use compact one-line summaries instead of showing output. */
 const COMPACT_TOOLS = new Set(["read", "grep", "find", "ls", "source_path"]);
+const STATE_TOOLS = new Set(["tasks", "goals"]);
 
 /** Tools rendered with the server-tool style (spinner + summary, no output). */
 const SERVER_STYLE_TOOLS = new Set(["web_search"]);
@@ -154,6 +155,19 @@ export function ToolExecution(props: ToolExecutionProps) {
         </Box>
       );
     }
+    if (STATE_TOOLS.has(props.name)) {
+      const { label, detail } = getToolHeaderParts(props.name, props.args);
+      return (
+        <Box marginTop={1} flexDirection="row">
+          <ToolUseLoader status="running" staticDisplay={staticDisplay} />
+          <Text color={theme.toolName} bold>
+            {label}
+          </Text>
+          {detail ? <Text color={theme.textDim}> {detail}</Text> : null}
+        </Box>
+      );
+    }
+
     // Non-compact tools keep the sparkle spinner with a blinking dot prefix
     const { label, detail } = getToolHeaderParts(props.name, props.args);
 
@@ -243,6 +257,25 @@ export function ToolExecution(props: ToolExecutionProps) {
         <Box flexGrow={1} width={headerContentWidth}>
           <Text bold color={theme.toolName} wrap="wrap">
             {summary}
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  if (STATE_TOOLS.has(name)) {
+    const { label, detail } = getToolHeaderParts(name, args);
+    const inline = getInlineSummary(name, result, isError);
+    return (
+      <Box marginTop={1} flexDirection="row">
+        <ToolUseLoader status={isError ? "error" : "done"} />
+        <Box flexGrow={1} width={headerContentWidth}>
+          <Text wrap="wrap">
+            <Text bold color={isError ? theme.toolError : theme.toolName}>
+              {label}
+            </Text>
+            {detail ? <Text color={theme.textDim}> {detail}</Text> : null}
+            {inline ? <Text color={theme.textDim}> · {inline}</Text> : null}
           </Text>
         </Box>
       </Box>
@@ -474,6 +507,10 @@ function getToolHeaderParts(
       const action = String(args.action ?? "");
       return { label: displayName, detail: action };
     }
+    case "goals": {
+      const action = String(args.action ?? "");
+      return { label: displayName, detail: action };
+    }
     default: {
       if (name.startsWith("mcp__")) {
         // Pick the most meaningful arg as the detail (skip long blobs)
@@ -528,6 +565,8 @@ function toolDisplayName(name: string): string {
       return "Source";
     case "tasks":
       return "Task";
+    case "goals":
+      return "Goal";
     default:
       // snake_case → Title Case so downstream consumers (gg-editor's 91 tools,
       // future MCP tools, custom tools) get readable names without each
@@ -651,6 +690,15 @@ function getInlineSummary(name: string, result: string, isError: boolean): strin
         return text.length > 50 ? text.slice(0, 47) + "…" : text;
       }
       return result.split("\n")[0];
+    }
+    case "goals": {
+      const quoted = result.match(/"([^"]+)"/);
+      if (quoted) {
+        const text = quoted[1];
+        return text.length > 50 ? text.slice(0, 47) + "…" : text;
+      }
+      const firstLine = result.split("\n")[0] ?? "";
+      return firstLine.length > 60 ? firstLine.slice(0, 57) + "…" : firstLine;
     }
     default: {
       if (name.startsWith("mcp__")) {

@@ -2,6 +2,34 @@ import { describe, expect, it } from "vitest";
 import { PROMPT_COMMANDS } from "./prompt-commands.js";
 
 describe("prompt commands", () => {
+  it("defines /goal as a durable loop that discourages report-only worker tasks", () => {
+    const goal = PROMPT_COMMANDS.find((command) => command.name === "goal");
+
+    expect(goal).toBeDefined();
+    expect(goal?.description).toContain("programmatic goal loop");
+    expect(goal?.prompt).toContain("Persist the run with the goals tool");
+    expect(goal?.prompt).toContain("Build a capability/evidence plan before implementation");
+    expect(goal?.prompt).toContain("evidence_plan items");
+    expect(goal?.prompt).toContain("Only ask the user for true external blockers");
+    expect(goal?.prompt).toContain('named "User prerequisites" in the pane');
+    expect(goal?.prompt).toContain(
+      "The user may provide the missing value or instructions in chat",
+    );
+    expect(goal?.prompt).toContain("verify it locally without revealing secrets");
+    expect(goal?.prompt).toContain("Do not require a script for every task");
+    expect(goal?.prompt).toContain("choose the simplest reliable proof");
+    expect(goal?.prompt).toContain("Do not use the normal tasks tool for this workflow");
+    expect(goal?.prompt).toContain("Each Goal task prompt must be standalone");
+    expect(goal?.prompt).toContain('Avoid pure "investigate and report" tasks');
+    expect(goal?.prompt).toContain('goals({ action: "evidence"');
+    expect(goal?.prompt).toContain("creating or updating the next implementation task");
+    expect(goal?.prompt).toContain("briefly say what the orchestrator is doing");
+    expect(goal?.prompt).toContain(
+      "take the next durable control-loop action rather than merely narrating",
+    );
+    expect(goal?.prompt).toContain("only complete after verification passes");
+  });
+
   it("defines /source as a plan-research-adjust-verify command", () => {
     const source = PROMPT_COMMANDS.find((command) => command.name === "source");
 

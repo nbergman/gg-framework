@@ -72,11 +72,21 @@ type MatchResult = MatchSuccess | MatchFailure;
 function tryMatch(working: string, old: string, next: string, replaceAll: boolean): MatchResult {
   if (old.length === 0) return { ok: false, reason: "not_found" };
 
-  if (replaceAll && working.includes(old)) {
-    return { ok: true, newWorking: working.split(old).join(next) };
+  const occurrences = countOccurrences(working, old);
+
+  if (replaceAll && occurrences > 0) {
+    let newWorking = working;
+    let replaced = 0;
+    while (replaced < occurrences) {
+      const match = fuzzyFindText(newWorking, old);
+      if (!match.found) break;
+      newWorking =
+        newWorking.slice(0, match.index) + next + newWorking.slice(match.index + match.matchLength);
+      replaced++;
+    }
+    return replaced === occurrences ? { ok: true, newWorking } : { ok: false, reason: "not_found" };
   }
 
-  const occurrences = countOccurrences(working, old);
   if (occurrences === 0) return { ok: false, reason: "not_found" };
   if (occurrences > 1) return { ok: false, reason: "ambiguous", occurrences };
 
@@ -110,9 +120,9 @@ export function createEditTool(
   return {
     name: "edit",
     description:
-      "Replace text in a file via { old_text, new_text } edits applied sequentially. Read the file first. " +
-      "Each old_text must uniquely match exactly one location — set replace_all: true to swap every occurrence (renames). " +
-      "For long blocks, a line containing only `...` in BOTH old_text and new_text elides a middle preserved verbatim. " +
+      "Replace text in a file via { old_text, new_text } edits applied sequentially. Read the file first and copy old_text from the latest read/diff. " +
+      "Each old_text should identify one location — include surrounding context; set replace_all: true only for deliberate global replacements/renames. " +
+      "The matcher tolerates safe whitespace/quote/dash drift, but do not paraphrase. For long blocks, a line containing only `...` in BOTH old_text and new_text elides a middle preserved verbatim. " +
       "Partial-apply by default: failed edits are listed for retry, successful ones are still written — " +
       "re-issue ONLY the listed failures, not the whole batch. Returns a unified diff.",
     parameters: EditParams,

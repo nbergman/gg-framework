@@ -31,6 +31,13 @@ function toolsSection(prompt: string): string {
   return next === -1 ? rest : rest.slice(0, next);
 }
 
+function promptSize(prompt: string): { characters: number; lines: number } {
+  return {
+    characters: prompt.length,
+    lines: prompt.split("\n").length,
+  };
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -62,6 +69,8 @@ describe("buildSystemPrompt", () => {
     expect(sectionIndex(prompt, "## Research & Verification")).toBeLessThan(
       sectionIndex(prompt, "## Code Quality"),
     );
+    expect(prompt).not.toContain("## Goal Auto-Continuation Events");
+    expect(prompt).not.toContain("[event:goal_worker_complete]");
     expect(sectionIndex(prompt, "## Code Quality")).toBeLessThan(sectionIndex(prompt, "## Tools"));
     expect(sectionIndex(prompt, "## Tools")).toBeLessThan(
       sectionIndex(prompt, "## Project Context"),
@@ -130,7 +139,53 @@ describe("buildSystemPrompt", () => {
     expect(sectionIndex(prompt, "## Project Context")).toBeLessThan(
       sectionIndex(prompt, "## Language Style Packs"),
     );
-    expect(prompt).toContain("AGENTS.md / CLAUDE.md override Language Style Packs");
+    expect(prompt).toContain(
+      "AGENTS.md / CLAUDE.md and other project rules override default guidance",
+    );
+  });
+
+  it("preserves critical operating rules concisely", async () => {
+    const cwd = await makeProject({ "AGENTS.md": "Project rules win." });
+    const prompt = await buildSystemPrompt(cwd, undefined, true, undefined, [
+      "read",
+      "edit",
+      "write",
+      "bash",
+      "web_search",
+      "web_fetch",
+      "source_path",
+      "mcp__kencode-search__referenceSources",
+      "mcp__kencode-search__discoverRepos",
+      "mcp__kencode-search__searchCode",
+      "exit_plan",
+    ]);
+
+    for (const required of [
+      "works directly in the user's codebase",
+      "completing tasks end-to-end",
+      "at most one short sentence",
+      "Final replies: 1–3 sentences, hard cap 5",
+      "Read before `edit`/`write`",
+      "re-read after formatters",
+      "Compute in bash; write with `edit`/`write`",
+      "Match neighbors",
+      "Keep edits small",
+      "Do routine follow-up yourself",
+      "Ask first for destructive actions",
+      "Preserve user work",
+      "Rule precedence: project context files",
+      "Do not assume APIs",
+      "Use `source_path`",
+      "web_search` then `web_fetch",
+      "ReferenceSources",
+      "DiscoverRepos",
+      "SearchCode literal text/RE2 (not semantic)",
+      "Restricted: bash, edit, write except .gg/plans/",
+      "End the plan with exactly `## Steps`",
+      "Never claim unrun or failing checks passed",
+    ]) {
+      expect(prompt).toContain(required);
+    }
   });
 
   it("keeps kencode guidance concise while separating repo discovery from exact search", async () => {
@@ -150,5 +205,93 @@ describe("buildSystemPrompt", () => {
     expect(tools).toContain("path` is a literal file-path substring");
     expect(tools).not.toContain("zero hits, every time");
     expect(tools.length).toBeLessThan(950);
+  });
+
+  it("measures representative system prompt sizes", async () => {
+    const normalCwd = await makeProject();
+    const normalPrompt = await buildSystemPrompt(normalCwd, undefined, false, undefined, [
+      "read",
+      "edit",
+      "bash",
+      "enter_plan",
+      "exit_plan",
+    ]);
+
+    const planModePrompt = await buildSystemPrompt(normalCwd, undefined, true, undefined, [
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "web_search",
+      "web_fetch",
+      "source_path",
+      "mcp__kencode-search__referenceSources",
+      "mcp__kencode-search__discoverRepos",
+      "mcp__kencode-search__searchCode",
+      "enter_plan",
+      "exit_plan",
+    ]);
+
+    const typescriptCwd = await makeProject({
+      "AGENTS.md": "Prefer strict TypeScript. Run the focused test before reporting completion.",
+      "package.json": JSON.stringify({
+        scripts: {
+          test: "vitest",
+          typecheck: "tsc --noEmit",
+        },
+        devDependencies: {
+          typescript: "^5.0.0",
+          vitest: "^3.0.0",
+        },
+      }),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { strict: true } }),
+    });
+    const typescriptPrompt = await buildSystemPrompt(
+      typescriptCwd,
+      [
+        {
+          name: "find-skills",
+          description: "Find and install agent skills from the open ecosystem.",
+          content: "Use this when the user asks whether a skill exists for a task.",
+          source: "test-fixture",
+        },
+      ],
+      false,
+      undefined,
+      [
+        "read",
+        "edit",
+        "bash",
+        "grep",
+        "find",
+        "ls",
+        "web_search",
+        "web_fetch",
+        "source_path",
+        "skill",
+        "mcp__kencode-search__referenceSources",
+        "mcp__kencode-search__discoverRepos",
+        "mcp__kencode-search__searchCode",
+        "enter_plan",
+        "exit_plan",
+      ],
+      new Set<LanguageId>(["typescript"]),
+    );
+
+    const measurements = {
+      normal: promptSize(normalPrompt),
+      planMode: promptSize(planModePrompt),
+      typescriptProjectContextToolsSkills: promptSize(typescriptPrompt),
+    };
+
+    console.info(`system prompt size measurements: ${JSON.stringify(measurements)}`);
+
+    expect(measurements.normal.characters).toBeLessThan(4_800);
+    expect(measurements.planMode.characters).toBeLessThan(6_500);
+    expect(measurements.typescriptProjectContextToolsSkills.characters).toBeLessThan(9_500);
+    expect(measurements.planMode.characters).toBeGreaterThan(measurements.normal.characters);
+    expect(measurements.typescriptProjectContextToolsSkills.characters).toBeGreaterThan(
+      measurements.normal.characters,
+    );
   });
 });

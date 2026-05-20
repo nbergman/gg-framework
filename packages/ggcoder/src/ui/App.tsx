@@ -43,10 +43,18 @@ import { StreamingArea } from "./components/StreamingArea.js";
 import { ActivityIndicator } from "./components/ActivityIndicator.js";
 import { InputArea } from "./components/InputArea.js";
 import { Footer } from "./components/Footer.js";
+import {
+  GoalStatusBar,
+  reconcileGoalStatusEntriesWithRuns,
+  removeGoalStatusEntry,
+  syncGoalStatusEntries,
+  type GoalStatusEntry,
+} from "./components/GoalStatusBar.js";
 import { Banner } from "./components/Banner.js";
 import { PlanOverlay } from "./components/PlanOverlay.js";
 import { ModelSelector } from "./components/ModelSelector.js";
 import { TaskOverlay } from "./components/TaskOverlay.js";
+import { GoalOverlay } from "./components/GoalOverlay.js";
 import { PixelOverlay } from "./components/PixelOverlay.js";
 import type { PreparedPixelFix } from "../core/pixel-fix.js";
 import { SkillsOverlay } from "./components/SkillsOverlay.js";
@@ -124,6 +132,38 @@ import {
   flushOnTurnEnd,
   flushOverflow,
 } from "./live-item-flush.js";
+import {
+  appendGoalDecision,
+  appendGoalEvidence,
+  formatGoalBlockingPrerequisites,
+  goalHasBlockingPrerequisites,
+  loadGoalRuns,
+  reconcileActiveGoalRuns,
+  projectDir,
+  summarizeGoalCounts,
+  summarizeGoalCountsFromRuns,
+  updateGoalTask,
+  upsertGoalRun,
+  type GoalRun,
+} from "../core/goal-store.js";
+import {
+  canCompleteGoalRun,
+  decideGoalNextAction,
+  shouldCreateVerifierFixTask,
+} from "../core/goal-controller.js";
+import {
+  listGoalWorkers,
+  startGoalWorker,
+  stopGoalWorker,
+  subscribeGoalWorkerCompletions,
+  type GoalWorkerCompletion,
+} from "../core/goal-worker.js";
+import {
+  formatGoalVerifierCompletionEvent,
+  formatGoalWorkerCompletionEvent,
+  isGoalSyntheticEvent,
+  parseGoalSyntheticEvent,
+} from "./goal-events.js";
 
 /** Where ggcoder bugs should be reported. Surfaced in the guidance line. */
 const GGCODER_BUG_REPORT_URL = "github.com/kenkaiiii/gg-framework/issues";
@@ -176,6 +216,33 @@ interface TaskItem {
   title: string;
   id: string;
 }
+
+interface GoalItem {
+  kind: "goal";
+  title: string;
+  workerId?: string;
+  id: string;
+}
+
+export interface GoalProgressItem {
+  kind: "goal_progress";
+  phase:
+    | "worker_started"
+    | "worker_finished"
+    | "orchestrator_reviewing"
+    | "orchestrator_working"
+    | "continuing"
+    | "verifier_started"
+    | "verifier_finished"
+    | "terminal";
+  title: string;
+  detail?: string;
+  workerId?: string;
+  status?: string;
+  id: string;
+}
+
+export type GoalProgressDraft = Omit<GoalProgressItem, "id">;
 
 interface AssistantItem {
   kind: "assistant";
@@ -386,6 +453,8 @@ export interface ToolGroupItem {
 export type CompletedItem =
   | UserItem
   | TaskItem
+  | GoalItem
+  | GoalProgressItem
   | AssistantItem
   | ToolStartItem
   | ToolDoneItem
@@ -431,6 +500,85 @@ function compactHistory(items: CompletedItem[]): CompletedItem[] {
     compacted[i] = items[i];
   }
   return compacted;
+}
+
+function summarizeGoalCompletion(summary: string): string | undefined {
+  const lines = summary
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && line !== "[agent_done]");
+  const statusLine = lines.find((line) => /^Status:/i.test(line));
+  const changedLine = lines.find((line) =>
+    /^(Changed|Implemented|Fixed|Added|Key findings|Full verifier)/i.test(line),
+  );
+  const verificationLine = lines.find((line) => /^(Verification|Verified|Result):/i.test(line));
+  return statusLine ?? changedLine ?? verificationLine ?? lines[0];
+}
+
+function formatGoalWorkerFinishedTitle(
+  taskTitle: string,
+  status: GoalWorkerCompletion["status"],
+): string {
+  return status === "done"
+    ? `Worker finished: ${taskTitle}. Reporting back.`
+    : `Worker failed: ${taskTitle}. Reporting back.`;
+}
+
+export function formatGoalTerminalProgress(run: GoalRun): GoalProgressDraft | null {
+  switch (run.status) {
+    case "passed":
+      return {
+        kind: "goal_progress",
+        phase: "terminal",
+        title: `Goal passed: ${run.title}`,
+        detail: "Verifier evidence is recorded; auto-continuation stopped.",
+        status: run.status,
+      };
+    case "failed":
+      return {
+        kind: "goal_progress",
+        phase: "terminal",
+        title: `Goal failed: ${run.title}`,
+        detail: "Auto-continuation stopped. Check Goal tasks for the failing step.",
+        status: run.status,
+      };
+    case "blocked":
+      return {
+        kind: "goal_progress",
+        phase: "terminal",
+        title: `Goal blocked: ${run.title}`,
+        detail: goalHasBlockingPrerequisites(run)
+          ? formatGoalBlockingPrerequisites(run)
+          : (run.blockers[0] ?? "A prerequisite or missing verifier blocked progress."),
+        status: run.status,
+      };
+    case "paused":
+      return {
+        kind: "goal_progress",
+        phase: "terminal",
+        title: `Goal paused: ${run.title}`,
+        detail: run.blockers[0] ?? "Auto-continuation paused.",
+        status: run.status,
+      };
+    case "draft":
+    case "ready":
+    case "running":
+    case "verifying":
+      return null;
+  }
+}
+
+export type OverlayPaneKind = "tasks" | "goal" | "skills" | "plan" | "eyes" | "pixel";
+
+export function shouldHideHistoryForOverlayView(
+  isOverlayView: boolean,
+  isAgentRunning: boolean,
+): boolean {
+  // Overlay panes should be clean, full-screen views like Tasks/Plans/Skills.
+  // When the agent is idle, pane open/close goes through resetUI(), so history
+  // remains in sessionStore and is reprinted after the pane closes. While the
+  // agent is running we keep Static mounted because resetUI would abort the run.
+  return isOverlayView && !isAgentRunning;
 }
 
 // flushOnTurnText, flushOnTurnEnd are imported from ./live-item-flush.ts
@@ -631,7 +779,7 @@ export interface AppProps {
   onEnterPlanRef?: { current: (reason?: string) => void };
   onExitPlanRef?: { current: (planPath: string) => Promise<string> };
   skills?: Skill[];
-  initialOverlay?: "pixel";
+  initialOverlay?: "pixel" | "goal";
   rebuildToolsForCwd?: (cwd: string) => AgentTool[];
   repoMapChangedFilesRef?: { current: Set<string> };
   repoMapReadFilesRef?: { current: Set<string> };
@@ -680,12 +828,13 @@ export interface AppProps {
   sessionStore?: {
     messages: Message[];
     history: CompletedItem[];
+    liveItems?: CompletedItem[];
     approvedPlanPath?: string;
     planSteps: PlanStep[];
     sessionPath?: string;
     sessionTitle?: string;
     sessionTitleGenerated: boolean;
-    overlay?: "model" | "tasks" | "skills" | "plan" | "theme" | "eyes" | "pixel" | null;
+    overlay?: "model" | "tasks" | "goal" | "skills" | "plan" | "theme" | "eyes" | "pixel" | null;
     planAutoExpand?: boolean;
     pendingAction?: {
       prompt: string;
@@ -696,6 +845,7 @@ export interface AppProps {
     pendingResetUI?: boolean;
     runAllTasks?: boolean;
     runAllPixel?: boolean;
+    goalStatusEntries?: GoalStatusEntry[];
   };
 }
 
@@ -744,14 +894,22 @@ export function App(props: AppProps) {
     }
     return [{ kind: "banner", id: "banner" }];
   });
-  // Items from the current/last turn — rendered in the live area so they stay visible
-  const [liveItems, setLiveItems] = useState<CompletedItem[]>([]);
+  // Items from the current/last turn — rendered in the live area so they stay visible.
+  // Seed from sessionStore so Goal progress/completion rows and other live output
+  // survive pane/overlay/resize remounts before they are flushed to <Static>.
+  const [liveItems, setLiveItems] = useState<CompletedItem[]>(
+    () => props.sessionStore?.liveItems ?? [],
+  );
   // overlay seeded from sessionStore (lives across remount). Falls back to
   // props.initialOverlay (CLI launched with one), then null.
   const [overlay, setOverlay] = useState<
-    "model" | "tasks" | "skills" | "plan" | "theme" | "eyes" | "pixel" | null
+    "model" | "tasks" | "goal" | "skills" | "plan" | "theme" | "eyes" | "pixel" | null
   >(props.sessionStore?.overlay ?? props.initialOverlay ?? null);
   const [taskCount, setTaskCount] = useState(() => getTaskCount(props.cwd));
+  const [goalCount, setGoalCount] = useState(0);
+  const [goalStatusEntries, setGoalStatusEntries] = useState<GoalStatusEntry[]>(
+    props.sessionStore?.goalStatusEntries ?? [],
+  );
   const [eyesCount, setEyesCount] = useState<number | undefined>(() =>
     isEyesActive(props.cwd) ? journalCount({ status: "open" }, props.cwd) : undefined,
   );
@@ -763,6 +921,10 @@ export function App(props: AppProps) {
   const [runAllTasks, setRunAllTasks] = useState(props.sessionStore?.runAllTasks ?? false);
   const runAllTasksRef = useRef(props.sessionStore?.runAllTasks ?? false);
   const startTaskRef = useRef<(title: string, prompt: string, taskId: string) => void>(() => {});
+  const agentRunningRef = useRef(false);
+  const runningGoalIdsRef = useRef<Set<string>>(new Set());
+  const activeVerifierRunIdsRef = useRef<Set<string>>(new Set());
+  const startGoalRunRef = useRef<(run: GoalRun) => void>(() => {});
   const runAllPixelRef = useRef(props.sessionStore?.runAllPixel ?? false);
   const currentPixelFixRef = useRef<PreparedPixelFix | null>(null);
   const startPixelFixRef = useRef<(errorId: string) => void>(() => {});
@@ -807,9 +969,12 @@ export function App(props: AppProps) {
   // duplicate/omitted renders.
   const nextIdRef = useRef(
     (() => {
-      const hist = props.sessionStore?.history ?? props.initialHistory ?? [];
+      const items = [
+        ...(props.sessionStore?.history ?? props.initialHistory ?? []),
+        ...(props.sessionStore?.liveItems ?? []),
+      ];
       let max = -1;
-      for (const item of hist) {
+      for (const item of items) {
         const n = Number(item.id);
         if (Number.isFinite(n) && n > max) max = n;
       }
@@ -848,7 +1013,35 @@ export function App(props: AppProps) {
    */
   const triggerAutoSetupRef = useRef<() => Promise<void>>(async () => {});
 
-  const getId = () => String(nextIdRef.current++);
+  const getId = () => `ui-${nextIdRef.current++}`;
+  const appendGoalProgress = useCallback((item: GoalProgressDraft) => {
+    setLiveItems((prev) => [...prev, { ...item, id: getId() }]);
+  }, []);
+  const goalNumberForRun = useCallback(
+    (runId: string) =>
+      Math.max(1, goalStatusEntries.findIndex((entry) => entry.runId === runId) + 1),
+    [goalStatusEntries],
+  );
+  const clearGoalStatusEntry = useCallback(
+    (runId: string) => {
+      setGoalStatusEntries((prev) => {
+        const next = removeGoalStatusEntry(prev, runId);
+        if (props.sessionStore) props.sessionStore.goalStatusEntries = next;
+        return next;
+      });
+    },
+    [props.sessionStore],
+  );
+  const upsertGoalStatusEntry = useCallback(
+    (entry: GoalStatusEntry) => {
+      setGoalStatusEntries((prev) => {
+        const next = syncGoalStatusEntries(prev, entry);
+        if (props.sessionStore) props.sessionStore.goalStatusEntries = next;
+        return next;
+      });
+    },
+    [props.sessionStore],
+  );
 
   // Two-phase flush: items waiting to be moved to Static history after the
   // live area has been cleared and Ink has committed the smaller output.
@@ -856,11 +1049,20 @@ export function App(props: AppProps) {
   const [flushGeneration, setFlushGeneration] = useState(0);
 
   /** Queue items for two-phase flush and signal the drain effect. */
-  const queueFlush = useCallback((items: CompletedItem[]) => {
-    if (items.length === 0) return;
-    pendingFlushRef.current = [...pendingFlushRef.current, ...items];
-    setFlushGeneration((g) => g + 1);
-  }, []);
+  const queueFlush = useCallback(
+    (items: CompletedItem[]) => {
+      if (items.length === 0) return;
+      pendingFlushRef.current = [...pendingFlushRef.current, ...items];
+      if (props.sessionStore) {
+        const queuedIds = new Set(items.map((item) => item.id));
+        props.sessionStore.liveItems = (props.sessionStore.liveItems ?? []).filter(
+          (item) => !queuedIds.has(item.id),
+        );
+      }
+      setFlushGeneration((g) => g + 1);
+    },
+    [props.sessionStore],
+  );
 
   // Mirror runtime state choices (model/provider/thinking) into renderApp's
   // closure so unmount/remount preserves them.
@@ -886,6 +1088,9 @@ export function App(props: AppProps) {
     if (sessionStore) sessionStore.history = history;
   }, [history, sessionStore]);
   useEffect(() => {
+    if (sessionStore) sessionStore.liveItems = liveItems;
+  }, [liveItems, sessionStore]);
+  useEffect(() => {
     if (sessionStore) sessionStore.planSteps = planSteps;
   }, [planSteps, sessionStore]);
   useEffect(() => {
@@ -894,6 +1099,9 @@ export function App(props: AppProps) {
   useEffect(() => {
     if (sessionStore) sessionStore.overlay = overlay;
   }, [overlay, sessionStore]);
+  useEffect(() => {
+    if (sessionStore) sessionStore.goalStatusEntries = goalStatusEntries;
+  }, [goalStatusEntries, sessionStore]);
 
   // pendingAction is consumed via a useEffect AFTER agentLoop is created
   // — see below where useAgentLoop is set up.
@@ -916,6 +1124,42 @@ export function App(props: AppProps) {
   useEffect(() => {
     getGitBranch(displayedCwd).then(setGitBranch);
   }, [displayedCwd]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshGoalCount = () => {
+      void reconcileActiveGoalRuns(props.cwd, {
+        isWorkerActive: (workerId) =>
+          listGoalWorkers(props.cwd).some(
+            (worker) => worker.id === workerId && worker.status === "running",
+          ),
+      }).then(({ runs }) => {
+        const counts = summarizeGoalCountsFromRuns(runs);
+        if (cancelled) return;
+        setGoalCount(counts.active);
+        setGoalStatusEntries((prev) => {
+          const next = reconcileGoalStatusEntriesWithRuns(prev, runs, {
+            isWorkerActive: (workerId, run) =>
+              listGoalWorkers(props.cwd).some(
+                (worker) =>
+                  worker.id === workerId &&
+                  worker.goalRunId === run.id &&
+                  worker.status === "running",
+              ),
+            isVerifierActive: (run) => activeVerifierRunIdsRef.current.has(run.id),
+          });
+          if (props.sessionStore) props.sessionStore.goalStatusEntries = next;
+          return next;
+        });
+      });
+    };
+    refreshGoalCount();
+    const interval = setInterval(refreshGoalCount, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [props.cwd]);
 
   // Periodic update check during long sessions
   useEffect(() => {
@@ -1210,8 +1454,10 @@ export function App(props: AppProps) {
     }
   }, [props.settingsFile]);
 
+  const compactionAbortRef = useRef<AbortController | null>(null);
+
   const compactConversation = useCallback(
-    async (messages: Message[]): Promise<Message[]> => {
+    async (messages: Message[], signal?: AbortSignal): Promise<Message[]> => {
       const contextWindow = getContextWindow(currentModel, contextWindowOptions);
       const tokensBefore = estimateConversationTokens(messages);
       const spinId = getId();
@@ -1223,6 +1469,10 @@ export function App(props: AppProps) {
 
       // Show animated spinner
       setLiveItems((prev) => [...prev, { kind: "compacting", id: spinId }]);
+
+      const ownedAbort = signal ? null : new AbortController();
+      const compactionSignal = signal ?? ownedAbort?.signal;
+      if (ownedAbort) compactionAbortRef.current = ownedAbort;
 
       try {
         // Resolve fresh credentials for compaction too
@@ -1246,7 +1496,7 @@ export function App(props: AppProps) {
           projectId: compactProjectId,
           baseUrl: compactBaseUrl,
           contextWindow,
-          signal: undefined,
+          signal: compactionSignal,
           approvedPlanPath: approvedPlanPathRef.current,
         });
 
@@ -1275,14 +1525,24 @@ export function App(props: AppProps) {
         return result.messages;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        log("ERROR", "compaction", `Compaction failed: ${msg}`);
-        // Replace spinner with error
-        setLiveItems((prev) =>
-          prev.map((item) =>
-            item.id === spinId ? toErrorItem(err, spinId, "Compaction failed") : item,
-          ),
+        const isAbort =
+          compactionSignal?.aborted || msg.includes("aborted") || msg.includes("abort");
+        log(
+          isAbort ? "WARN" : "ERROR",
+          "compaction",
+          isAbort ? "Compaction aborted" : `Compaction failed: ${msg}`,
         );
-        return messages; // Return unchanged on failure
+        setLiveItems((prev) =>
+          isAbort
+            ? prev.filter((item) => item.id !== spinId)
+            : prev.map((item) =>
+                item.id === spinId ? toErrorItem(err, spinId, "Compaction failed") : item,
+              ),
+        );
+        return messages; // Return unchanged on failure/abort
+      } finally {
+        if (ownedAbort && compactionAbortRef.current === ownedAbort)
+          compactionAbortRef.current = null;
       }
     },
     [
@@ -2002,6 +2262,12 @@ export function App(props: AppProps) {
           }, 500);
         }
 
+        // Goal loop: after the orchestrator handles a worker/verifier event,
+        // continue the same Goal automatically until it reaches a terminal state.
+        for (const runId of [...runningGoalIdsRef.current]) {
+          setTimeout(() => continueGoalRun(runId), 500);
+        }
+
         // Pixel fix: observe branch + commits, patch status, optionally pick
         // up the next open error if run-all is active.
         const pendingFix = currentPixelFixRef.current;
@@ -2088,7 +2354,8 @@ export function App(props: AppProps) {
       }, []),
       onQueuedStart: useCallback((content: UserContent) => {
         // When a queued message starts processing, show it as a UserItem
-        // and flush prior items to history
+        // and flush prior items to history. Synthetic system events are hidden
+        // from the transcript but still routed through the main agent context.
         const displayText =
           typeof content === "string"
             ? content
@@ -2096,6 +2363,26 @@ export function App(props: AppProps) {
                 .filter((c): c is TextContent => c.type === "text")
                 .map((c) => c.text)
                 .join("\n");
+        if (isGoalSyntheticEvent(displayText)) {
+          const eventInfo = parseGoalSyntheticEvent(displayText);
+          setLiveItems((prev) => {
+            if (prev.length > 0) queueFlush(prev);
+            return [];
+          });
+          setDoneStatus(null);
+          appendGoalProgress({
+            kind: "goal_progress",
+            phase: "orchestrator_reviewing",
+            title: "Orchestrator reviewing Goal update",
+            detail:
+              eventInfo?.kind === "worker"
+                ? `Worker ${eventInfo.worker ?? "finished"} reported back${eventInfo.task ? ` on ${eventInfo.task}` : ""}. Inspecting Goal state.`
+                : `Verifier reported ${eventInfo?.status ?? "status"}. Inspecting evidence and next action.`,
+            workerId: eventInfo?.worker,
+            status: eventInfo?.status,
+          });
+          return;
+        }
         const imageCount =
           typeof content === "string"
             ? undefined
@@ -2195,7 +2482,12 @@ export function App(props: AppProps) {
     if (pendingFlushRef.current.length > 0) {
       const items = pendingFlushRef.current;
       pendingFlushRef.current = [];
-      setHistory((h) => compactHistory([...h, ...trimFlushedItems(items)]));
+      setHistory((h) => {
+        const next = compactHistory([...h, ...trimFlushedItems(items)]);
+        if (sessionStore) sessionStore.history = next;
+        return next;
+      });
+      if (sessionStore) sessionStore.liveItems = liveItems;
     }
   }, [flushGeneration]);
 
@@ -2296,11 +2588,14 @@ export function App(props: AppProps) {
 
       // Handle /compact — compact conversation
       if (trimmed === "/compact" || trimmed === "/c") {
-        const compacted = await compactConversation(messagesRef.current);
-        if (compacted !== messagesRef.current) {
+        const ac = new AbortController();
+        compactionAbortRef.current = ac;
+        const compacted = await compactConversation(messagesRef.current, ac.signal);
+        if (!ac.signal.aborted && compacted !== messagesRef.current) {
           messagesRef.current = compacted;
           await persistCompactedSession(compacted);
         }
+        if (compactionAbortRef.current === ac) compactionAbortRef.current = null;
         return;
       }
 
@@ -2455,6 +2750,26 @@ export function App(props: AppProps) {
             id: getId(),
           },
         ]);
+        return;
+      }
+
+      // Handle /goals — open goal pane
+      if (trimmed === "/goals") {
+        if (props.resetUI && props.sessionStore && !agentLoop.isRunning) {
+          props.sessionStore.overlay = "goal";
+          props.sessionStore.planAutoExpand = false;
+          props.resetUI();
+        } else {
+          stdout?.write("\x1b[2J\x1b[3J\x1b[H");
+          setStaticKey((key) => key + 1);
+          if (props.sessionStore) {
+            props.sessionStore.overlay = "goal";
+            props.sessionStore.planAutoExpand = false;
+            if (agentLoop.isRunning) props.sessionStore.pendingResetUI = true;
+          }
+          setPlanAutoExpand(false);
+          setOverlay("goal");
+        }
         return;
       }
 
@@ -2670,6 +2985,8 @@ export function App(props: AppProps) {
     if (agentLoop.isRunning) {
       agentLoop.clearQueue();
       agentLoop.abort();
+    } else if (compactionAbortRef.current) {
+      compactionAbortRef.current.abort();
     } else {
       handleDoubleExit();
     }
@@ -2828,6 +3145,7 @@ export function App(props: AppProps) {
     };
     const promptOrder = [
       // Project audits / one-shot analysis
+      "goal",
       "init",
       "research",
       "scan",
@@ -2885,6 +3203,7 @@ export function App(props: AppProps) {
             provider={currentProvider}
             cwd={displayedCwd}
             taskCount={taskCount}
+            goalCount={goalCount}
           />
         );
       case "user":
@@ -2908,6 +3227,55 @@ export function App(props: AppProps) {
             </Text>
           </Box>
         );
+      case "goal":
+        return (
+          <Box key={item.id} marginTop={1}>
+            <Text wrap="wrap">
+              <Text color={theme.success} bold>
+                {"▶ "}
+              </Text>
+              <Text color={theme.textDim}>{"Goal: "}</Text>
+              <Text color={theme.success}>{item.title}</Text>
+              {item.workerId ? <Text color={theme.textDim}> · worker {item.workerId}</Text> : null}
+            </Text>
+          </Box>
+        );
+      case "goal_progress": {
+        const isError =
+          item.status === "failed" || item.status === "fail" || item.status === "blocked";
+        const color =
+          item.phase === "terminal" && !isError
+            ? theme.success
+            : isError
+              ? theme.warning
+              : theme.primary;
+        const glyph =
+          item.phase === "worker_finished" || item.phase === "verifier_finished"
+            ? "✓ "
+            : item.phase === "terminal"
+              ? item.status === "passed"
+                ? "◆ "
+                : "! "
+              : "↻ ";
+        return (
+          <Box key={item.id} marginTop={1} flexDirection="column" flexShrink={1}>
+            <Text wrap="wrap">
+              <Text color={color} bold>
+                {glyph}
+              </Text>
+              <Text color={color} bold>
+                {item.title}
+              </Text>
+              {item.workerId ? <Text color={theme.textDim}> · worker {item.workerId}</Text> : null}
+            </Text>
+            {item.detail ? (
+              <Text color={theme.textDim} wrap="wrap">
+                {`  ${item.detail}`}
+              </Text>
+            ) : null}
+          </Box>
+        );
+      }
       case "style_pack": {
         const names = item.added.map((id) => LANGUAGE_DISPLAY_NAMES[id]);
         const headerLabel = item.added.length > 1 ? "STYLE PACKS ACTIVE" : "STYLE PACK ACTIVE";
@@ -3310,12 +3678,652 @@ export function App(props: AppProps) {
     ],
   );
 
+  const openOverlay = useCallback(
+    (kind: "tasks" | "goal" | "skills" | "plan" | "pixel") => {
+      if (props.resetUI && props.sessionStore && !agentLoop.isRunning) {
+        props.sessionStore.overlay = kind;
+        if (kind !== "plan") props.sessionStore.planAutoExpand = false;
+        props.resetUI();
+      } else {
+        if (props.sessionStore) {
+          props.sessionStore.overlay = kind;
+          if (kind !== "plan") props.sessionStore.planAutoExpand = false;
+          if (agentLoop.isRunning) props.sessionStore.pendingResetUI = true;
+        }
+        if (kind !== "plan") setPlanAutoExpand(false);
+        setOverlay(kind);
+      }
+    },
+    [agentLoop.isRunning, props, stdout],
+  );
+
+  const closeOverlay = useCallback(() => {
+    if (props.resetUI && props.sessionStore && !agentLoop.isRunning) {
+      props.sessionStore.overlay = null;
+      props.resetUI();
+    } else {
+      if (props.sessionStore) {
+        props.sessionStore.overlay = null;
+        if (agentLoop.isRunning) props.sessionStore.pendingResetUI = true;
+      }
+      setOverlay(null);
+    }
+  }, [agentLoop.isRunning, overlay, props, stdout]);
+
+  const runGoalSyntheticEvent = useCallback(
+    (eventText: string) => {
+      const eventInfo = parseGoalSyntheticEvent(eventText);
+      const detail =
+        eventInfo?.kind === "worker"
+          ? `Inspecting worker result${eventInfo.task ? ` for ${eventInfo.task}` : ""}.`
+          : `Inspecting verifier result${eventInfo?.status ? ` (${eventInfo.status})` : ""}.`;
+      if (agentRunningRef.current) {
+        appendGoalProgress({
+          kind: "goal_progress",
+          phase: "orchestrator_reviewing",
+          title: "Goal update queued for orchestrator",
+          detail: `${detail} It will report back after the current turn.`,
+          workerId: eventInfo?.worker,
+          status: eventInfo?.status,
+        });
+        agentLoop.queueMessage(eventText);
+        return;
+      }
+      appendGoalProgress({
+        kind: "goal_progress",
+        phase: "orchestrator_reviewing",
+        title: "Orchestrator reviewing Goal update",
+        detail,
+        workerId: eventInfo?.worker,
+        status: eventInfo?.status,
+      });
+      setLastUserMessage("");
+      setDoneStatus(null);
+      void agentLoop.run(eventText).catch((err: unknown) => {
+        log("ERROR", "goal", err instanceof Error ? err.message : String(err));
+        setLiveItems((prev) => [...prev, toErrorItem(err, getId(), "Goal")]);
+      });
+    },
+    [agentLoop, appendGoalProgress],
+  );
+
+  const continueGoalRun = useCallback(
+    (runId: string) => {
+      void (async () => {
+        const latestRun = await reconcileActiveGoalRuns(props.cwd, {
+          isWorkerActive: (workerId) =>
+            listGoalWorkers(props.cwd).some(
+              (worker) => worker.id === workerId && worker.status === "running",
+            ),
+        }).then(({ runs }) => runs.find((item) => item.id === runId) ?? null);
+        if (!latestRun) {
+          runningGoalIdsRef.current.delete(runId);
+          clearGoalStatusEntry(runId);
+          return;
+        }
+        const decision = decideGoalNextAction(latestRun);
+        if (decision.kind === "wait") return;
+        if (
+          decision.kind === "terminal" ||
+          decision.kind === "blocked" ||
+          decision.kind === "pause"
+        ) {
+          const status =
+            decision.kind === "terminal"
+              ? decision.status
+              : decision.kind === "blocked"
+                ? "blocked"
+                : "paused";
+          const nextRun = {
+            ...latestRun,
+            status,
+            continueRequestedAt: undefined,
+            blockers:
+              decision.kind === "blocked" || decision.kind === "pause"
+                ? Array.from(new Set([...latestRun.blockers, decision.reason]))
+                : latestRun.blockers,
+          } as GoalRun;
+          await upsertGoalRun(props.cwd, nextRun);
+          await appendGoalDecision(props.cwd, latestRun.id, {
+            kind: "continuation_stopped",
+            reason: decision.reason,
+            content: `terminal=${status}`,
+          });
+          const terminalProgress = formatGoalTerminalProgress(nextRun);
+          if (terminalProgress) appendGoalProgress(terminalProgress);
+          runningGoalIdsRef.current.delete(runId);
+          clearGoalStatusEntry(runId);
+          return;
+        }
+        let runForNextAction = latestRun;
+        if (
+          latestRun.continueRequestedAt &&
+          !listGoalWorkers(props.cwd).some((worker) => worker.status === "running") &&
+          activeVerifierRunIdsRef.current.size === 0
+        ) {
+          await appendGoalDecision(props.cwd, latestRun.id, {
+            kind: "continuation_consumed",
+            reason: `Continuation request consumed by ${decision.kind}.`,
+          });
+          runForNextAction = await upsertGoalRun(props.cwd, {
+            ...latestRun,
+            continueRequestedAt: undefined,
+          });
+        }
+        appendGoalProgress({
+          kind: "goal_progress",
+          phase: "continuing",
+          title: `Continuing Goal: ${latestRun.title}`,
+          detail: "Starting the next worker task or verifier step automatically.",
+          status: latestRun.status,
+        });
+        upsertGoalStatusEntry({
+          runId: latestRun.id,
+          label: latestRun.title,
+          phase: "orchestrating",
+          startedAt: Date.now(),
+          detail: "choosing next step",
+        });
+        startGoalRunRef.current(runForNextAction);
+      })().catch((err: unknown) => {
+        runningGoalIdsRef.current.delete(runId);
+        clearGoalStatusEntry(runId);
+        log("ERROR", "goal", err instanceof Error ? err.message : String(err));
+        setLiveItems((prev) => [...prev, toErrorItem(err, getId(), "Goal")]);
+      });
+    },
+    [appendGoalProgress, clearGoalStatusEntry, props.cwd, upsertGoalStatusEntry],
+  );
+
+  const handleGoalWorkerComplete = useCallback(
+    (run: GoalRun, completion: GoalWorkerCompletion) => {
+      const taskTitle =
+        run.tasks.find((task) => task.id === completion.worker.goalTaskId)?.title ??
+        completion.worker.goalTaskId;
+      const eventText = formatGoalWorkerCompletionEvent(run, taskTitle, completion);
+      void summarizeGoalCounts(completion.worker.cwd).then((counts) => setGoalCount(counts.active));
+      appendGoalProgress({
+        kind: "goal_progress",
+        phase: "worker_finished",
+        title: formatGoalWorkerFinishedTitle(taskTitle, completion.status),
+        detail: summarizeGoalCompletion(completion.summary),
+        workerId: completion.worker.id,
+        status: completion.status,
+      });
+      upsertGoalStatusEntry({
+        runId: run.id,
+        label: taskTitle,
+        phase: completion.status === "done" ? "reviewing" : "failed",
+        startedAt: Date.now(),
+        detail: completion.status === "done" ? "reviewing result" : "task failed",
+        workerId: completion.worker.id,
+        goalNumber: goalNumberForRun(run.id),
+      });
+      runGoalSyntheticEvent(eventText);
+      void (async () => {
+        if (listGoalWorkers(completion.worker.cwd).some((worker) => worker.status === "running"))
+          return;
+        if (activeVerifierRunIdsRef.current.size > 0) return;
+        const runs = await loadGoalRuns(completion.worker.cwd);
+        const queued = runs.find(
+          (item) => item.continueRequestedAt && !goalHasBlockingPrerequisites(item),
+        );
+        if (queued) setTimeout(() => continueGoalRun(queued.id), 750);
+      })().catch((err: unknown) =>
+        log("ERROR", "goal", err instanceof Error ? err.message : String(err)),
+      );
+    },
+    [
+      appendGoalProgress,
+      continueGoalRun,
+      goalNumberForRun,
+      runGoalSyntheticEvent,
+      upsertGoalStatusEntry,
+    ],
+  );
+
+  useEffect(() => {
+    return subscribeGoalWorkerCompletions((completion) => {
+      void (async () => {
+        const latestRun =
+          (await loadGoalRuns(completion.worker.cwd)).find(
+            (item) => item.id === completion.worker.goalRunId,
+          ) ?? null;
+        if (!latestRun) {
+          log("WARN", "goal", `Worker completion for unknown Goal ${completion.worker.goalRunId}`);
+          return;
+        }
+        runningGoalIdsRef.current.add(latestRun.id);
+        handleGoalWorkerComplete(latestRun, completion);
+      })().catch((err: unknown) => {
+        log("ERROR", "goal", err instanceof Error ? err.message : String(err));
+        setLiveItems((prev) => [...prev, toErrorItem(err, getId(), "Goal")]);
+      });
+    }, props.cwd);
+  }, [handleGoalWorkerComplete, props.cwd]);
+
+  const startGoalRun = useCallback(
+    (run: GoalRun) => {
+      runningGoalIdsRef.current.add(run.id);
+      void (async () => {
+        if (goalHasBlockingPrerequisites(run)) {
+          setOverlay(null);
+          const detail = formatGoalBlockingPrerequisites(run);
+          await upsertGoalRun(props.cwd, {
+            ...run,
+            status: "blocked",
+            blockers: Array.from(new Set([...run.blockers, detail])),
+          });
+          setGoalCount((await summarizeGoalCounts(props.cwd)).active);
+          appendGoalProgress({
+            kind: "goal_progress",
+            phase: "terminal",
+            title: `Goal blocked: ${run.title}`,
+            detail,
+            status: "blocked",
+          });
+          runningGoalIdsRef.current.delete(run.id);
+          clearGoalStatusEntry(run.id);
+          return;
+        }
+
+        const decision = decideGoalNextAction(run);
+        await appendGoalDecision(props.cwd, run.id, decision);
+        if (decision.kind === "terminal") {
+          const terminalProgress = formatGoalTerminalProgress(run);
+          if (terminalProgress) appendGoalProgress(terminalProgress);
+          runningGoalIdsRef.current.delete(run.id);
+          clearGoalStatusEntry(run.id);
+          return;
+        }
+        if (decision.kind === "wait") {
+          appendGoalProgress({
+            kind: "goal_progress",
+            phase: "worker_started",
+            title: decision.workerId ? `Goal working: ${run.title}` : `Goal active: ${run.title}`,
+            detail: decision.reason,
+            workerId: decision.workerId,
+          });
+          upsertGoalStatusEntry({
+            runId: run.id,
+            label: run.title,
+            phase: decision.workerId ? "worker" : "orchestrating",
+            startedAt: Date.now(),
+            detail: decision.reason,
+            workerId: decision.workerId,
+            goalNumber: goalNumberForRun(run.id),
+          });
+          return;
+        }
+        if (decision.kind === "complete") {
+          await upsertGoalRun(props.cwd, { ...run, status: "passed" });
+          setGoalCount((await summarizeGoalCounts(props.cwd)).active);
+          appendGoalProgress({
+            kind: "goal_progress",
+            phase: "terminal",
+            title: `Goal passed: ${run.title}`,
+            detail: decision.reason,
+            status: "passed",
+          });
+          runningGoalIdsRef.current.delete(run.id);
+          clearGoalStatusEntry(run.id);
+          return;
+        }
+        if (decision.kind === "run_verifier") {
+          await verifyGoalRun(run);
+          return;
+        }
+        if (decision.kind === "create_task") {
+          await updateGoalTask(props.cwd, run.id, `auto-${Date.now()}`, {
+            title: decision.title,
+            prompt: decision.prompt,
+            status: "pending",
+          });
+          const latestRun =
+            (await loadGoalRuns(props.cwd)).find((item) => item.id === run.id) ?? run;
+          await upsertGoalRun(props.cwd, { ...latestRun, status: "ready" });
+          setTimeout(() => continueGoalRun(run.id), 250);
+          return;
+        }
+        if (decision.kind === "blocked") {
+          await upsertGoalRun(props.cwd, {
+            ...run,
+            status: "blocked",
+            blockers: [...run.blockers, decision.reason],
+          });
+          setGoalCount((await summarizeGoalCounts(props.cwd)).active);
+          appendGoalProgress({
+            kind: "goal_progress",
+            phase: "terminal",
+            title: `Goal blocked: ${run.title}`,
+            detail: decision.reason,
+            status: "blocked",
+          });
+          runningGoalIdsRef.current.delete(run.id);
+          clearGoalStatusEntry(run.id);
+          return;
+        }
+        if (decision.kind === "pause") {
+          await updateGoalTask(props.cwd, run.id, decision.task.id, {
+            status: "blocked",
+            attempts: decision.attempts,
+            lastSummary: "Paused after worker attempt limit.",
+          });
+          await upsertGoalRun(props.cwd, {
+            ...run,
+            status: "paused",
+            blockers: [...run.blockers, decision.reason],
+          });
+          await appendGoalEvidence(props.cwd, run.id, {
+            kind: "summary",
+            label: "Goal paused",
+            content: decision.reason,
+          });
+          setGoalCount((await summarizeGoalCounts(props.cwd)).active);
+          appendGoalProgress({
+            kind: "goal_progress",
+            phase: "terminal",
+            title: `Goal paused: ${run.title}`,
+            detail: decision.reason,
+            status: "paused",
+          });
+          runningGoalIdsRef.current.delete(run.id);
+          clearGoalStatusEntry(run.id);
+          return;
+        }
+
+        await updateGoalTask(props.cwd, run.id, decision.task.id, { attempts: decision.attempts });
+        const worker = await startGoalWorker({
+          cwd: props.cwd,
+          provider: currentProvider,
+          model: currentModel,
+          goalRunId: run.id,
+          goalTaskId: decision.task.id,
+          prompt: decision.task.prompt,
+        });
+        await upsertGoalRun(props.cwd, {
+          ...run,
+          status: "running",
+          activeWorkerId: worker.id,
+          continueRequestedAt: undefined,
+        });
+        setOverlay(null);
+        setGoalCount((await summarizeGoalCounts(props.cwd)).active);
+        appendGoalProgress({
+          kind: "goal_progress",
+          phase: "worker_started",
+          title: `Worker started: ${decision.task.title}`,
+          detail: "Task is running in the background.",
+          workerId: worker.id,
+          status: worker.status,
+        });
+        upsertGoalStatusEntry({
+          runId: run.id,
+          label: decision.task.title,
+          phase: "worker",
+          startedAt: Date.now(),
+          detail: "background worker running",
+          workerId: worker.id,
+          goalNumber: goalNumberForRun(run.id),
+        });
+      })().catch((err: unknown) => {
+        clearGoalStatusEntry(run.id);
+        log("ERROR", "goal", err instanceof Error ? err.message : String(err));
+        setLiveItems((prev) => [...prev, toErrorItem(err, getId(), "Goal")]);
+      });
+    },
+    [
+      props.cwd,
+      currentProvider,
+      currentModel,
+      appendGoalProgress,
+      clearGoalStatusEntry,
+      goalNumberForRun,
+      upsertGoalStatusEntry,
+    ],
+  );
+
+  const verifyGoalRun = useCallback(
+    async (run: GoalRun) => {
+      if (!run.verifier?.command) {
+        await appendGoalEvidence(props.cwd, run.id, {
+          kind: "summary",
+          label: "Missing verifier",
+          content: "No verifier command is configured.",
+        });
+        await upsertGoalRun(props.cwd, {
+          ...run,
+          status: "blocked",
+          blockers: [...run.blockers, "No verifier command configured."],
+        });
+        appendGoalProgress({
+          kind: "goal_progress",
+          phase: "terminal",
+          title: `Goal blocked: ${run.title}`,
+          detail: "No verifier command is configured.",
+          status: "blocked",
+        });
+        runningGoalIdsRef.current.delete(run.id);
+        clearGoalStatusEntry(run.id);
+        return;
+      }
+
+      activeVerifierRunIdsRef.current.add(run.id);
+      await upsertGoalRun(props.cwd, {
+        ...run,
+        status: "verifying",
+        continueRequestedAt: undefined,
+      });
+      appendGoalProgress({
+        kind: "goal_progress",
+        phase: "verifier_started",
+        title: `Verifier started: ${run.title}`,
+        detail: run.verifier.command,
+        status: "verifying",
+      });
+      const startedAt = Date.now();
+      const verifierTimeoutMs = Number(process.env.GG_GOAL_VERIFIER_TIMEOUT_MS ?? 10 * 60 * 1000);
+      upsertGoalStatusEntry({
+        runId: run.id,
+        label: run.title,
+        phase: "verifier",
+        startedAt,
+        detail: run.verifier.command,
+        goalNumber: goalNumberForRun(run.id),
+      });
+      const { spawn } = await import("node:child_process");
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      const logDir = join(projectDir(props.cwd), "verifiers");
+      await mkdir(logDir, { recursive: true });
+      const outputPath = join(logDir, `${run.id}-${startedAt}.log`);
+      const child = spawn(run.verifier.command, {
+        cwd: props.cwd,
+        shell: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env },
+      });
+      let output = "";
+      child.stdout?.on("data", (chunk: Buffer) => {
+        output += chunk.toString("utf-8");
+        if (output.length > 20_000) output = output.slice(output.length - 20_000);
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        output += chunk.toString("utf-8");
+        if (output.length > 20_000) output = output.slice(output.length - 20_000);
+      });
+      let verifierSettled = false;
+      let timedOut = false;
+      const timeout =
+        verifierTimeoutMs > 0
+          ? setTimeout(() => {
+              timedOut = true;
+              if (child.pid) child.kill("SIGTERM");
+              const killTimer = setTimeout(() => {
+                if (!verifierSettled && child.pid) child.kill("SIGKILL");
+              }, 5000);
+              killTimer.unref?.();
+              finishVerifier(
+                124,
+                `Verifier timed out after ${verifierTimeoutMs}ms and was terminated.\n${output}`,
+              );
+            }, verifierTimeoutMs)
+          : undefined;
+      timeout?.unref?.();
+      const finishVerifier = (code: number | null, forcedOutput?: string) => {
+        if (verifierSettled) return;
+        verifierSettled = true;
+        if (timeout) clearTimeout(timeout);
+        activeVerifierRunIdsRef.current.delete(run.id);
+        void (async () => {
+          const status = code === 0 ? "pass" : "fail";
+          const failureClass = timedOut
+            ? "verifier_timeout"
+            : forcedOutput?.startsWith("Verifier process error:")
+              ? "verifier_spawn_error"
+              : status === "fail"
+                ? "verifier_failure"
+                : "verifier_pass";
+          const summary =
+            (forcedOutput ?? output).trim() ||
+            (code === 0 ? "Verifier passed." : "Verifier failed.");
+          const latestRun =
+            (await loadGoalRuns(props.cwd)).find((item) => item.id === run.id) ?? run;
+          await writeFile(outputPath, summary + "\n", "utf-8");
+          const runWithVerifier: GoalRun = {
+            ...latestRun,
+            verifier: {
+              ...latestRun.verifier,
+              description: latestRun.verifier?.description ?? "Goal verifier",
+              command: run.verifier?.command,
+              lastResult: {
+                status,
+                summary,
+                command: run.verifier?.command,
+                exitCode: code ?? 1,
+                outputPath,
+                checkedAt: new Date().toISOString(),
+              },
+            },
+          };
+          const completionCheck = canCompleteGoalRun(runWithVerifier);
+          const verifiedRun = await upsertGoalRun(props.cwd, {
+            ...runWithVerifier,
+            continueRequestedAt: undefined,
+            status:
+              status === "pass" && completionCheck.ok
+                ? "passed"
+                : status === "pass"
+                  ? "ready"
+                  : "failed",
+          });
+          await appendGoalEvidence(props.cwd, run.id, {
+            kind: "command",
+            label: `Verifier ${status}`,
+            content: `${failureClass}: ${summary}`.slice(0, 4000),
+            path: outputPath,
+          });
+          await appendGoalDecision(props.cwd, run.id, {
+            kind: `verifier_${status}`,
+            reason: `${failureClass}: verifier exited with code ${code ?? 1}.`,
+            content: `outputPath=${outputPath}; durationMs=${Date.now() - startedAt}`,
+          });
+          if (status === "fail" && shouldCreateVerifierFixTask(latestRun)) {
+            await updateGoalTask(props.cwd, run.id, `fix-${Date.now()}`, {
+              title: "Fix verifier failure",
+              prompt:
+                `Goal verifier failed after ${Date.now() - startedAt}ms. Original goal: ${run.goal}\n\n` +
+                `Verifier command: ${run.verifier?.command}\n\n` +
+                `Failure output:\n${summary.slice(-6000)}\n\nFix the cause, record evidence with the goals tool, and rerun relevant verification.`,
+              status: "pending",
+            });
+            const runWithPendingFix =
+              (await loadGoalRuns(props.cwd)).find((item) => item.id === run.id) ?? latestRun;
+            await upsertGoalRun(props.cwd, { ...runWithPendingFix, status: "ready" });
+          }
+          setGoalCount((await summarizeGoalCounts(props.cwd)).active);
+          appendGoalProgress({
+            kind: "goal_progress",
+            phase: "verifier_finished",
+            title: `Verifier ${status}: ${run.title}`,
+            detail: summarizeGoalCompletion(summary),
+            status,
+          });
+          upsertGoalStatusEntry({
+            runId: run.id,
+            label: run.title,
+            phase: status === "pass" ? "reviewing" : "failed",
+            startedAt: Date.now(),
+            detail: status === "pass" ? "reviewing verifier evidence" : "verifier failed",
+            goalNumber: goalNumberForRun(run.id),
+          });
+          const eventText = formatGoalVerifierCompletionEvent(
+            verifiedRun,
+            status,
+            run.verifier?.command ?? "",
+            code ?? 1,
+            summary,
+          );
+          runGoalSyntheticEvent(eventText);
+          const continuationRun = (await loadGoalRuns(props.cwd)).find(
+            (item) => item.id === run.id,
+          );
+          if (continuationRun?.continueRequestedAt && status === "pass") {
+            setTimeout(() => continueGoalRun(run.id), 500);
+          }
+        })().catch((err: unknown) => {
+          clearGoalStatusEntry(run.id);
+          log("ERROR", "goal", err instanceof Error ? err.message : String(err));
+          setLiveItems((prev) => [...prev, toErrorItem(err, getId(), "Goal verifier")]);
+        });
+      };
+      child.on("close", (code) => finishVerifier(code));
+      child.on("error", (err) => finishVerifier(1, `Verifier process error: ${err.message}`));
+    },
+    [
+      props.cwd,
+      appendGoalProgress,
+      clearGoalStatusEntry,
+      goalNumberForRun,
+      runGoalSyntheticEvent,
+      upsertGoalStatusEntry,
+    ],
+  );
+
+  const pauseGoalRun = useCallback(
+    (run: GoalRun) => {
+      void (async () => {
+        runningGoalIdsRef.current.delete(run.id);
+        if (run.activeWorkerId) await stopGoalWorker(run.activeWorkerId);
+        await upsertGoalRun(props.cwd, { ...run, status: "paused", activeWorkerId: undefined });
+        setGoalCount((await summarizeGoalCounts(props.cwd)).active);
+        appendGoalProgress({
+          kind: "goal_progress",
+          phase: "terminal",
+          title: `Goal paused: ${run.title}`,
+          detail: "Auto-continuation stopped until resumed.",
+          status: "paused",
+        });
+        clearGoalStatusEntry(run.id);
+      })().catch((err: unknown) => {
+        log("ERROR", "goal", err instanceof Error ? err.message : String(err));
+        setLiveItems((prev) => [...prev, toErrorItem(err, getId(), "Goal")]);
+      });
+    },
+    [appendGoalProgress, clearGoalStatusEntry, props.cwd],
+  );
+
   // Keep refs in sync for access from stale closures (onDone)
   startTaskRef.current = startTask;
+  startGoalRunRef.current = startGoalRun;
   useEffect(() => {
     runAllTasksRef.current = runAllTasks;
     if (props.sessionStore) props.sessionStore.runAllTasks = runAllTasks;
   }, [runAllTasks, props.sessionStore]);
+
+  useEffect(() => {
+    agentRunningRef.current = agentLoop.isRunning;
+  }, [agentLoop.isRunning]);
 
   const startPixelFix = useCallback(
     (errorId: string) => {
@@ -3423,18 +4431,24 @@ export function App(props: AppProps) {
   }, [runAllPixel, props.sessionStore]);
 
   const isTaskView = overlay === "tasks";
+  const isGoalView = overlay === "goal";
   const isSkillsView = overlay === "skills";
   const isPlanView = overlay === "plan";
   const isEyesView = overlay === "eyes";
   const isPixelView = overlay === "pixel";
-  const isOverlayView = isTaskView || isSkillsView || isPlanView || isEyesView || isPixelView;
+  const isOverlayView =
+    isTaskView || isGoalView || isSkillsView || isPlanView || isEyesView || isPixelView;
+  const shouldHideHistoryForOverlay = shouldHideHistoryForOverlayView(
+    isOverlayView,
+    agentLoop.isRunning,
+  );
 
   return (
     <Box flexDirection="column" width={columns}>
       {/* History — scrolled up, managed by Ink Static. */}
       <Static
         key={`${resizeKey}-${staticKey}`}
-        items={isOverlayView && !agentLoop.isRunning ? [] : history}
+        items={shouldHideHistoryForOverlay ? [] : history}
         style={{ width: "100%" }}
       >
         {(item) => (
@@ -3473,6 +4487,25 @@ export function App(props: AppProps) {
               markTaskInProgress(props.cwd, next.id);
               startTask(next.title, next.prompt, next.id);
             }
+          }}
+        />
+      ) : isGoalView ? (
+        <GoalOverlay
+          cwd={props.cwd}
+          agentRunning={agentLoop.isRunning}
+          onClose={() => {
+            void summarizeGoalCounts(props.cwd).then((counts) => setGoalCount(counts.active));
+            closeOverlay();
+          }}
+          onRunGoal={(run) => {
+            setOverlay(null);
+            startGoalRun(run);
+          }}
+          onVerifyGoal={(run) => {
+            void verifyGoalRun(run);
+          }}
+          onPauseGoal={(run) => {
+            pauseGoalRun(run);
           }}
         />
       ) : isPixelView ? (
@@ -3771,40 +4804,16 @@ export function App(props: AppProps) {
               // live-area transition (chat input → TaskOverlay) natively, and
               // the chat history above stays in scrollback. When the overlay
               // closes, the history is still there (banner included).
-              if (props.resetUI && props.sessionStore && !agentLoop.isRunning) {
-                props.sessionStore.overlay = "tasks";
-                props.resetUI();
-              } else {
-                if (props.sessionStore) {
-                  props.sessionStore.overlay = "tasks";
-                  if (agentLoop.isRunning) props.sessionStore.pendingResetUI = true;
-                }
-                setOverlay("tasks");
-              }
+              openOverlay("tasks");
+            }}
+            onToggleGoal={() => {
+              openOverlay("goal");
             }}
             onToggleSkills={() => {
-              if (props.resetUI && props.sessionStore && !agentLoop.isRunning) {
-                props.sessionStore.overlay = "skills";
-                props.resetUI();
-              } else {
-                if (props.sessionStore) {
-                  props.sessionStore.overlay = "skills";
-                  if (agentLoop.isRunning) props.sessionStore.pendingResetUI = true;
-                }
-                setOverlay("skills");
-              }
+              openOverlay("skills");
             }}
             onTogglePixel={() => {
-              if (props.resetUI && props.sessionStore && !agentLoop.isRunning) {
-                props.sessionStore.overlay = "pixel";
-                props.resetUI();
-              } else {
-                if (props.sessionStore) {
-                  props.sessionStore.overlay = "pixel";
-                  if (agentLoop.isRunning) props.sessionStore.pendingResetUI = true;
-                }
-                setOverlay("pixel");
-              }
+              openOverlay("pixel");
             }}
             onTogglePlanMode={() => {
               const next = !planMode;
@@ -3839,16 +4848,19 @@ export function App(props: AppProps) {
               currentTheme={theme.name}
             />
           ) : (
-            <Footer
-              model={currentModel}
-              tokensIn={agentLoop.contextUsed}
-              contextWindowOptions={contextWindowOptions}
-              cwd={displayedCwd}
-              gitBranch={gitBranch}
-              thinkingLevel={thinkingEnabled ? getMaxThinkingLevel(currentModel) : undefined}
-              planMode={planMode}
-              exitPending={exitPending}
-            />
+            <>
+              <Footer
+                model={currentModel}
+                tokensIn={agentLoop.contextUsed}
+                contextWindowOptions={contextWindowOptions}
+                cwd={displayedCwd}
+                gitBranch={gitBranch}
+                thinkingLevel={thinkingEnabled ? getMaxThinkingLevel(currentModel) : undefined}
+                planMode={planMode}
+                exitPending={exitPending}
+              />
+              {!exitPending && <GoalStatusBar entries={goalStatusEntries} />}
+            </>
           )}
           {/* Status row — background tasks, eyes call-to-action, and the
               update-ready indicator all share a single line. Order is

@@ -204,6 +204,8 @@ function printHelp(): void {
   const slashCmds: [string, string][] = [
     ["/help", "Show available slash commands"],
     ["/model", "Switch AI model"],
+    ["/goal", "Create a programmatic goal loop"],
+    ["/goals", "Open the goal pane"],
     ["/compact", "Compact conversation context"],
     ["/session", "Switch or create sessions"],
     ["/new", "Start a new session"],
@@ -219,6 +221,7 @@ function printHelp(): void {
   console.log(primary("Keyboard shortcuts:"));
   const shortcuts: [string, string][] = [
     ["Ctrl+T", "Toggle task overlay"],
+    ["Ctrl+G", "Toggle goal overlay"],
     ["Ctrl+S", "Toggle skills overlay"],
     ["Ctrl+P", "Toggle plan mode"],
     ["Shift+Tab", "Toggle thinking"],
@@ -729,32 +732,40 @@ async function runInkTUI(opts: {
         const contextWindow = getContextWindow(model, { provider, accountId: creds.accountId });
         if (shouldCompact(messages, contextWindow, 0.8)) {
           log("INFO", "session", `Restored session exceeds context — auto-compacting`);
-          const compacted = await compact(messages, {
-            provider,
-            model,
-            apiKey: creds.accessToken,
-            accountId: creds.accountId,
-            projectId: creds.projectId,
-            baseUrl: cached.baseUrl,
-            contextWindow,
-          });
-          // Persist compacted continuation to a fresh session so future
-          // `ggcoder continue` starts from the compacted checkpoint instead
-          // of repeatedly restoring the oversized source session.
-          const compactedSession = await createCompactedSessionCheckpoint(sessionManager, {
-            cwd,
-            provider,
-            model,
-            messages: compacted.messages,
-          });
-          sessionPath = compactedSession.path;
-          messages.length = 0;
-          messages.push(...compacted.messages);
-          log("INFO", "session", `Auto-compaction complete`, {
-            before: String(compacted.result.originalCount),
-            after: String(compacted.result.newCount),
-            path: sessionPath,
-          });
+          const compactionAbort = new AbortController();
+          const onSigint = () => compactionAbort.abort();
+          process.once("SIGINT", onSigint);
+          try {
+            const compacted = await compact(messages, {
+              provider,
+              model,
+              apiKey: creds.accessToken,
+              accountId: creds.accountId,
+              projectId: creds.projectId,
+              baseUrl: cached.baseUrl,
+              contextWindow,
+              signal: compactionAbort.signal,
+            });
+            // Persist compacted continuation to a fresh session so future
+            // `ggcoder continue` starts from the compacted checkpoint instead
+            // of repeatedly restoring the oversized source session.
+            const compactedSession = await createCompactedSessionCheckpoint(sessionManager, {
+              cwd,
+              provider,
+              model,
+              messages: compacted.messages,
+            });
+            sessionPath = compactedSession.path;
+            messages.length = 0;
+            messages.push(...compacted.messages);
+            log("INFO", "session", `Auto-compaction complete`, {
+              before: String(compacted.result.originalCount),
+              after: String(compacted.result.newCount),
+              path: sessionPath,
+            });
+          } finally {
+            process.off("SIGINT", onSigint);
+          }
         }
 
         const restoredMessages = getRestoredMessagesForDisplay(messages);

@@ -542,6 +542,7 @@ export async function compact(
 ): Promise<{ messages: Message[]; result: CompactionResult }> {
   const originalCount = messages.length;
   const tokensBeforeEstimate = estimateConversationTokens(messages);
+  options.signal?.throwIfAborted();
 
   log("INFO", "compaction", `Starting compaction`, {
     messageCount: String(originalCount),
@@ -654,6 +655,7 @@ export async function compact(
   // Call LLM with retries on empty responses
   let summaryText = "";
   for (let attempt = 0; attempt <= MAX_SUMMARY_RETRIES; attempt++) {
+    options.signal?.throwIfAborted();
     try {
       const result = stream({
         provider: options.provider,
@@ -668,6 +670,7 @@ export async function compact(
       });
 
       const response = await result.response;
+      options.signal?.throwIfAborted();
 
       log("INFO", "compaction", `Summary LLM response received`, {
         attempt: String(attempt),
@@ -701,6 +704,9 @@ export async function compact(
         outputTokens: String(response.usage.outputTokens),
       });
     } catch (err) {
+      if (options.signal?.aborted || (err instanceof Error && err.name === "AbortError")) {
+        throw err;
+      }
       log(
         "WARN",
         "compaction",

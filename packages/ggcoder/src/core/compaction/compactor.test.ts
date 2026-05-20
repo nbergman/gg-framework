@@ -694,6 +694,31 @@ describe("compact", () => {
     expect(lastMsg.role).not.toBe("assistant");
   });
 
+  it("passes AbortSignal to summary stream and rejects without compacting on abort", async () => {
+    const mockStream = vi.mocked(stream);
+    const ac = new AbortController();
+    mockStream.mockImplementation(({ signal }: { signal?: AbortSignal }) => {
+      expect(signal).toBe(ac.signal);
+      return mockStreamResult(
+        new Promise((_, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        }) as never,
+      ) as never;
+    });
+
+    const messages = buildConversation(30);
+    const promise = compact(messages, { ...baseOptions, signal: ac.signal });
+    ac.abort();
+
+    await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+    expect(messages[0]).toEqual(makeMessage("system", "You are a helpful assistant."));
+    expect(messages).toHaveLength(62);
+  });
+
   it("retries on empty response before falling back", async () => {
     const mockStream = vi.mocked(stream);
     let callCount = 0;

@@ -557,6 +557,33 @@ describe("createEditTool", () => {
     expect(written).toContain("scheduleBreak();");
   });
 
+  it("dotdotdots: model can omit common indentation from elided bookends", async () => {
+    const filePath = path.join(tmpDir, "elide-indent.ts");
+    await fs.writeFile(
+      filePath,
+      "    function pomodoro() {\n      trackPomodoro(timer);\n      return timer;\n    }\n",
+    );
+
+    const tool = createEditTool(tmpDir);
+    await tool.execute(
+      {
+        file_path: "elide-indent.ts",
+        edits: [
+          {
+            old_text: "function pomodoro() {\n  ...\n  return timer;\n}",
+            new_text: "function pomodoro(): Timer {\n  ...\n  return timer;\n}",
+          },
+        ],
+      },
+      { signal: new AbortController().signal, toolCallId: "test-elide-indent" },
+    );
+
+    const written = await fs.readFile(filePath, "utf-8");
+    expect(written).toBe(
+      "    function pomodoro(): Timer {\n      trackPomodoro(timer);\n      return timer;\n    }\n",
+    );
+  });
+
   it("dotdotdots: failed elision falls through to standard not_found error", async () => {
     const filePath = path.join(tmpDir, "elide-fail.ts");
     await fs.writeFile(filePath, "function actuallyExists() { return 1; }\n");
@@ -822,6 +849,23 @@ describe("createEditTool", () => {
         { signal: new AbortController().signal, toolCallId: "test-replace-all-missing" },
       ),
     ).rejects.toThrow(/old_text not found/);
+  });
+
+  it("replace_all applies fuzzy matches instead of requiring exact split", async () => {
+    const filePath = path.join(tmpDir, "replace-all-fuzzy.txt");
+    await fs.writeFile(filePath, "say “hi”\nsay “hi”\n");
+
+    const tool = createEditTool(tmpDir);
+    await tool.execute(
+      {
+        file_path: "replace-all-fuzzy.txt",
+        edits: [{ old_text: 'say "hi"', new_text: "say hello", replace_all: true }],
+      },
+      { signal: new AbortController().signal, toolCallId: "test-replace-all-fuzzy" },
+    );
+
+    const written = await fs.readFile(filePath, "utf-8");
+    expect(written).toBe("say hello\nsay hello\n");
   });
 
   it("replace_all coexists with sequential edits in one batch", async () => {

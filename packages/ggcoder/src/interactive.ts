@@ -102,17 +102,25 @@ export async function runInteractive(config: CliConfig): Promise<void> {
     const contextWindow = getContextWindow(model, { provider, accountId: creds.accountId });
     if (shouldCompact(messages, contextWindow, 0.8)) {
       stdout.write("Compacting restored session...\n");
-      const compacted = await compact(messages, {
-        provider,
-        model,
-        apiKey: creds.accessToken,
-        accountId: creds.accountId,
-        projectId: creds.projectId,
-        baseUrl: config.baseUrl ?? creds.baseUrl,
-        contextWindow,
-      });
-      messages.length = 0;
-      messages.push(...compacted.messages);
+      const compactionAbort = new AbortController();
+      const onSigint = () => compactionAbort.abort();
+      process.once("SIGINT", onSigint);
+      try {
+        const compacted = await compact(messages, {
+          provider,
+          model,
+          apiKey: creds.accessToken,
+          accountId: creds.accountId,
+          projectId: creds.projectId,
+          baseUrl: config.baseUrl ?? creds.baseUrl,
+          contextWindow,
+          signal: compactionAbort.signal,
+        });
+        messages.length = 0;
+        messages.push(...compacted.messages);
+      } finally {
+        process.off("SIGINT", onSigint);
+      }
     }
   }
 
