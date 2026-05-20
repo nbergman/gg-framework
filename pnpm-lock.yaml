@@ -293,6 +293,9 @@ importers:
       marked-terminal:
         specifier: ^7.3.0
         version: 7.3.0(marked@15.0.12)
+      opensrc:
+        specifier: ^0.7.2
+        version: 0.7.2
       react:
         specifier: ^19.2.5
         version: 19.2.5
@@ -2621,6 +2624,10 @@ packages:
         optional: true
       zod:
         optional: true
+
+  opensrc@0.7.2:
+    resolution: {integrity: sha512-Tm0JVco91JYuaousOrWMvEhPd7cAOQuSp3v800VtUs2xRAmt60Wi431AfEKBEWpUGYCNXh25Eiod4xYS+8WAEg==}
+    hasBin: true
 
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
@@ -5401,6 +5408,8 @@ snapshots:
     optionalDependencies:
       ws: 8.20.0
       zod: 4.4.3
+
+  opensrc@0.7.2: {}
 
   optionator@0.9.4:
     dependencies:

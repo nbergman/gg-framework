@@ -69,6 +69,29 @@ function localFn() {}
     expect(paths).not.toContain("src/huge.ts");
   });
 
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "skips unreadable directories while scanning candidates",
+    async () => {
+      const cwd = await makeFixture({
+        "src/keep.ts": "export const keep = true;\n",
+      });
+      const trashPath = path.join(cwd, ".Trash");
+      await fs.mkdir(trashPath);
+      await fs.chmod(trashPath, 0o000);
+
+      try {
+        const { snapshot } = await buildRepoMap({
+          cwd,
+          now: new Date("2026-01-01T00:00:00.000Z"),
+        });
+
+        expect(snapshot.files.map((file) => file.path)).toEqual(["src/keep.ts"]);
+      } finally {
+        await fs.chmod(trashPath, 0o700).catch(() => {});
+      }
+    },
+  );
+
   it("ranks changed and focused files above unrelated files", () => {
     const files: RepoMapFile[] = [
       file("src/unrelated.ts", ["alpha"]),

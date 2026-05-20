@@ -533,6 +533,7 @@ export async function compact(
     model: string;
     apiKey?: string;
     accountId?: string;
+    projectId?: string;
     baseUrl?: string;
     contextWindow: number;
     signal?: AbortSignal;
@@ -661,6 +662,7 @@ export async function compact(
         maxTokens: MAX_SUMMARY_OUTPUT_TOKENS,
         apiKey: options.apiKey,
         accountId: options.accountId,
+        projectId: options.projectId,
         baseUrl: options.baseUrl,
         signal: options.signal,
       });

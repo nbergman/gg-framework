@@ -474,6 +474,79 @@ Cite these as needed per audit. Do not dump them into the report — use them to
 - **Report only.** Wait for the user to pick what to fix in Phase 6.`,
   },
   {
+    name: "source",
+    aliases: ["depcheck", "depsource"],
+    description: "Plan, source-check, adjust, and verify dependency-aligned code",
+    prompt: `# Source: Plan → Research → Adjust → Verify
+
+Use exact installed dependency source as the source of truth, then align this project end-to-end. This command is action-oriented like /verify and /compare: plan the investigation, research with source_path, adjust the code, and verify everything before finishing.
+
+## Phase 1: Plan the source check
+
+Do a short, private plan before tool-heavy work:
+
+1. Identify the dependency surface to check.
+   - If the user passed args, treat them as the package/repo/spec plus optional focus area.
+   - If no args were passed, inspect recent changes, changed files, imports, manifests, and current conversation context to pick the 1-3 dependencies most likely to matter.
+2. Decide what “aligned” means for this run: APIs/types, exports, CLI flags, config schema, runtime behavior, lifecycle/cleanup, error handling, package subpaths, tests, docs examples, or UI/tool wording.
+3. Decide the parallel research slices. Use up to 3 sub-agents; use fewer when the scope is obvious. Do not pad.
+
+Do not ask the user for confirmation. Proceed unless the focus is impossible to infer.
+
+## Phase 2: Research exact dependency source
+
+For every in-scope dependency, call \`source_path\` before making claims about APIs, types, flags, config, exports, or runtime behavior.
+
+Inspect the returned absolute source path with \`read\`, \`grep\`, \`find\`, and \`ls\`. Prefer dependency source files, package manifests, type definitions, exports, tests, examples, changelogs, and README sections inside that source checkout. Use web docs only when source alone is ambiguous.
+
+Spawn the research sub-agents in parallel in one response when useful:
+
+- **Local Usage Agent**: find local imports, wrappers, tool calls, config keys, CLI flags, tests, docs, and assumptions tied to the dependency. Return exact file:line anchors.
+- **Dependency Source Agent**: inspect the exact source_path checkout. Return exact source file paths and authoritative facts about APIs, types, exports, lifecycle, errors, config, and gotchas.
+- **Alignment Agent**: compare local assumptions to dependency facts. Return concrete mismatches, missing handling, stale usage, brittle assumptions, or simplifications backed by exact source evidence.
+
+Every finding must include both local file paths and dependency-source file paths. Mark unproven items as \`aligned\` or \`inconclusive\`; do not turn them into fixes.
+
+## Phase 3: Adjust the code
+
+Validate every candidate yourself, then fix all confirmed issues directly.
+
+Valid adjustments include:
+
+- Correct wrong/stale API or type usage for the installed version
+- Fix import/export/package-subpath usage
+- Fix config keys, option shapes, CLI flags, or tool schemas
+- Add missing lifecycle cleanup, abort handling, error handling, or edge-case handling proven by source
+- Align local tests/docs/examples with the installed dependency source
+- Align local tool prompts/TUI wording when they misrepresent dependency behavior
+- Remove small custom workarounds when the installed dependency source shows a supported built-in path
+
+Rules:
+
+- Read each local file before editing it.
+- Match neighboring local patterns and tone.
+- Keep edits minimal and focused; no broad refactors.
+- Do not upgrade dependencies unless the user explicitly asked for an upgrade.
+- Do not edit just because upstream source uses a different style.
+- If a formatter, codegen, or autofix mutates files, re-read before more edits.
+
+## Phase 4: Verify everything
+
+Run the relevant project checks for changed files. If this project specifies commands, use them. Otherwise infer from manifests. For TypeScript, run lint, typecheck, format check, and tests when available.
+
+If verification fails, read the failure, fix it, and rerun. Do not report success with failing or unrun checks.
+
+## Final response
+
+Keep it short:
+
+- Dependencies/source paths checked
+- Adjustments made, or \`No changes needed — local usage aligns with installed source\`
+- Verification commands run
+
+Do not ask what to do next unless blocked by missing information or an external failure.`,
+  },
+  {
     name: "research",
     aliases: [],
     description: "Research best tools, deps, and patterns",

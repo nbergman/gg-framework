@@ -8,6 +8,7 @@ export {
   createFindTool,
   createGrepTool,
   createLsTool,
+  createSourcePathTool,
 } from "./tools/index.js";
 
 // System prompt

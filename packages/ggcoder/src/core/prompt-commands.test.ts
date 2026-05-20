@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { PROMPT_COMMANDS } from "./prompt-commands.js";
 
 describe("prompt commands", () => {
+  it("defines /source as a plan-research-adjust-verify command", () => {
+    const source = PROMPT_COMMANDS.find((command) => command.name === "source");
+
+    expect(source).toBeDefined();
+    expect(source?.aliases).toEqual(["depcheck", "depsource"]);
+    expect(source?.description).toContain("Plan, source-check, adjust, and verify");
+    expect(source?.prompt).toContain("# Source: Plan → Research → Adjust → Verify");
+    expect(source?.prompt).toContain("Do a short, private plan");
+    expect(source?.prompt).toContain("call `source_path` before making claims");
+    expect(source?.prompt).toContain("Spawn the research sub-agents in parallel");
+    expect(source?.prompt).toContain("fix all confirmed issues directly");
+    expect(source?.prompt).toContain("Run the relevant project checks");
+    expect(source?.prompt).not.toContain("Do not start implementing until the user chooses");
+    expect(source?.prompt).not.toContain("Report only");
+  });
+
   it("defines /expand as a fresh, repo-validated comparison command", () => {
     const expand = PROMPT_COMMANDS.find((command) => command.name === "expand");
 

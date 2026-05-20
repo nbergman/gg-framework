@@ -610,6 +610,7 @@ export interface AppProps {
   apiKey?: string;
   baseUrl?: string;
   accountId?: string;
+  projectId?: string;
   cwd: string;
   version: string;
   showTokenUsage?: boolean;
@@ -617,7 +618,7 @@ export interface AppProps {
   loggedInProviders?: Provider[];
   credentialsByProvider?: Record<
     string,
-    { accessToken: string; accountId?: string; baseUrl?: string }
+    { accessToken: string; accountId?: string; projectId?: string; baseUrl?: string }
   >;
   initialHistory?: CompletedItem[];
   sessionsDir?: string;
@@ -902,7 +903,9 @@ export function App(props: AppProps) {
   const currentCreds = props.credentialsByProvider?.[currentProvider];
   const activeApiKey = currentCreds?.accessToken ?? props.apiKey;
   const activeAccountId = currentCreds?.accountId ?? props.accountId;
-  const activeBaseUrl = currentCreds?.baseUrl ?? props.baseUrl;
+  const activeProjectId = currentCreds?.projectId ?? props.projectId;
+  const activeBaseUrl =
+    currentProvider === "gemini" ? undefined : (currentCreds?.baseUrl ?? props.baseUrl);
   const contextWindowOptions = useMemo(
     () => ({ provider: currentProvider, accountId: activeAccountId }),
     [currentProvider, activeAccountId],
@@ -1225,11 +1228,13 @@ export function App(props: AppProps) {
         // Resolve fresh credentials for compaction too
         let compactApiKey = activeApiKey;
         let compactAccountId = activeAccountId;
+        let compactProjectId = activeProjectId;
         let compactBaseUrl = activeBaseUrl;
         if (props.authStorage) {
           const creds = await props.authStorage.resolveCredentials(currentProvider);
           compactApiKey = creds.accessToken;
           compactAccountId = creds.accountId;
+          compactProjectId = creds.projectId;
           compactBaseUrl = creds.baseUrl ?? compactBaseUrl;
         }
 
@@ -1238,6 +1243,7 @@ export function App(props: AppProps) {
           model: currentModel,
           apiKey: compactApiKey,
           accountId: compactAccountId,
+          projectId: compactProjectId,
           baseUrl: compactBaseUrl,
           contextWindow,
           signal: undefined,
@@ -1284,6 +1290,7 @@ export function App(props: AppProps) {
       currentProvider,
       activeApiKey,
       activeAccountId,
+      activeProjectId,
       activeBaseUrl,
       contextWindowOptions,
       props.authStorage,
@@ -1433,11 +1440,15 @@ export function App(props: AppProps) {
     async (opts?: { forceRefresh?: boolean }) => {
       if (props.authStorage) {
         const creds = await props.authStorage.resolveCredentials(currentProvider, opts);
-        return { apiKey: creds.accessToken, accountId: creds.accountId };
+        return {
+          apiKey: creds.accessToken,
+          accountId: creds.accountId,
+          projectId: creds.projectId,
+        };
       }
-      return { apiKey: activeApiKey!, accountId: activeAccountId };
+      return { apiKey: activeApiKey!, accountId: activeAccountId, projectId: activeProjectId };
     },
-    [props.authStorage, currentProvider, activeApiKey, activeAccountId],
+    [props.authStorage, currentProvider, activeApiKey, activeAccountId, activeProjectId],
   );
 
   const agentLoop = useAgentLoop(
@@ -1452,6 +1463,7 @@ export function App(props: AppProps) {
       apiKey: activeApiKey,
       baseUrl: activeBaseUrl,
       accountId: activeAccountId,
+      projectId: activeProjectId,
       resolveCredentials,
       transformContext,
     },
@@ -2277,7 +2289,7 @@ export function App(props: AppProps) {
       }
 
       // Handle /model directly — open inline selector
-      if (trimmed === "/model" || trimmed === "/m") {
+      if (trimmed === "/model" || trimmed === "/m" || trimmed === "/models") {
         setOverlay("model");
         return;
       }

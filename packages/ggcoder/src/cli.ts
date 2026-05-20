@@ -78,13 +78,19 @@ import {
   getRestoredMessagesForDisplay,
 } from "./core/session-compaction.js";
 import { setEstimatorModel } from "./core/compaction/token-estimator.js";
-import { getContextWindow, getDefaultModel, getMaxThinkingLevel } from "./core/model-registry.js";
+import {
+  getContextWindow,
+  getDefaultModel,
+  getMaxThinkingLevel,
+  getModel,
+} from "./core/model-registry.js";
 import { MCPClientManager, getMCPServers } from "./core/mcp/index.js";
 import { discoverAgents } from "./core/agents.js";
 import { discoverSkills } from "./core/skills.js";
 import path from "node:path";
 import { loginAnthropic } from "./core/oauth/anthropic.js";
 import { loginOpenAI } from "./core/oauth/openai.js";
+import { loginGemini } from "./core/oauth/gemini.js";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "./core/oauth/types.js";
 import chalk from "chalk";
 import { checkAndAutoUpdate } from "./core/auto-update.js";
@@ -158,7 +164,7 @@ function printHelp(): void {
   // Commands
   console.log(primary("Commands:"));
   const cmds: [string, string][] = [
-    ["login", "Log in to an AI provider (Anthropic, OpenAI)"],
+    ["login", "Log in to an AI provider (Anthropic, OpenAI, Gemini)"],
     ["logout", "Log out and clear stored credentials"],
     ["doctor", "Diagnose and fix auth/config issues"],
     ["sessions", "Browse and resume previous sessions"],
@@ -180,7 +186,7 @@ function printHelp(): void {
     ["-v, --version", "Show version number"],
     [
       "--provider <name>",
-      "AI provider (anthropic, xiaomi, openai, glm, moonshot, minimax, deepseek, openrouter)",
+      "AI provider (anthropic, xiaomi, openai, gemini, glm, moonshot, minimax, deepseek, openrouter)",
     ],
     ["--model <name>", "Model to use (e.g. claude-sonnet-4-6, gpt-5.5)"],
     ["--max-turns <n>", "Maximum agent turns per prompt"],
@@ -433,6 +439,7 @@ function main(): void {
 
   function getHardcodedDefault(p: string): string {
     if (p === "openai") return "gpt-5.5";
+    if (p === "gemini") return "gemini-3.1-flash-lite-preview";
     if (p === "glm") return "glm-5.1";
     if (p === "moonshot") return "kimi-k2.6";
     if (p === "minimax") return "MiniMax-M2.7";
@@ -525,7 +532,7 @@ async function runInkTUI(opts: {
   // fall back to whichever other provider actually resolved.
   const credentialsByProvider: Record<
     string,
-    { accessToken: string; accountId?: string; baseUrl?: string }
+    { accessToken: string; accountId?: string; projectId?: string; baseUrl?: string }
   > = {};
   const expiredProviders: Provider[] = [];
   for (const p of loggedInProviders) {
@@ -534,6 +541,7 @@ async function runInkTUI(opts: {
       credentialsByProvider[p] = {
         accessToken: resolved.accessToken,
         accountId: resolved.accountId,
+        projectId: resolved.projectId,
         baseUrl: resolved.baseUrl,
       };
     } catch {
@@ -589,6 +597,7 @@ async function runInkTUI(opts: {
   const creds = {
     accessToken: cached.accessToken,
     accountId: cached.accountId,
+    projectId: cached.projectId,
     refreshToken: "", // not needed downstream; SDK only uses accessToken
     expiresAt: Number.POSITIVE_INFINITY,
   };
@@ -725,6 +734,7 @@ async function runInkTUI(opts: {
             model,
             apiKey: creds.accessToken,
             accountId: creds.accountId,
+            projectId: creds.projectId,
             baseUrl: cached.baseUrl,
             contextWindow,
           });
@@ -793,6 +803,7 @@ async function runInkTUI(opts: {
     thinking: opts.thinkingLevel,
     apiKey: creds.accessToken,
     accountId: creds.accountId,
+    projectId: creds.projectId,
     cwd,
     theme: opts.theme,
     loggedInProviders,
@@ -898,7 +909,11 @@ async function runLogin(): Promise<void> {
       } satisfies OAuthCredentials;
     } else {
       creds =
-        provider === "anthropic" ? await loginAnthropic(callbacks) : await loginOpenAI(callbacks);
+        provider === "anthropic"
+          ? await loginAnthropic(callbacks)
+          : provider === "gemini"
+            ? await loginGemini(callbacks)
+            : await loginOpenAI(callbacks);
     }
 
     await authStorage.setCredentials(provider, creds);
@@ -1207,6 +1222,7 @@ async function runSessions(): Promise<void> {
 
   function getDefault(p: string): string {
     if (p === "openai") return "gpt-5.5";
+    if (p === "gemini") return "gemini-3.1-flash-lite-preview";
     if (p === "glm") return "glm-5.1";
     if (p === "moonshot") return "kimi-k2.6";
     if (p === "minimax") return "MiniMax-M2.7";
@@ -1741,14 +1757,8 @@ async function runPixel(): Promise<void> {
   });
 }
 
-function defaultModelFor(p: string): string {
-  if (p === "openai") return "gpt-5.5";
-  if (p === "glm") return "glm-5.1";
-  if (p === "moonshot") return "kimi-k2.6";
-  if (p === "minimax") return "MiniMax-M2.7";
-  if (p === "deepseek") return "deepseek-v4-pro";
-  if (p === "openrouter") return "qwen/qwen3.6-plus";
-  return "claude-opus-4-7";
+function defaultModelFor(p: Provider): string {
+  return getDefaultModel(p).id;
 }
 
 interface ParsedInstall {
@@ -1802,6 +1812,7 @@ async function resolveActiveProvider(
     "anthropic",
     "xiaomi",
     "openai",
+    "gemini",
     "glm",
     "moonshot",
     "minimax",
@@ -1818,9 +1829,11 @@ async function resolveActiveProvider(
   }
 
   if (loggedInProviders.includes(preferred)) {
+    const savedModelInfo = savedModel ? getModel(savedModel) : undefined;
     return {
       provider: preferred,
-      model: savedModel ?? getDefaultModel(preferred).id,
+      model:
+        savedModelInfo?.provider === preferred ? savedModelInfo.id : getDefaultModel(preferred).id,
       loggedInProviders,
     };
   }
@@ -1835,6 +1848,7 @@ async function resolveActiveProvider(
 function displayName(provider: Provider): string {
   if (provider === "anthropic") return "Anthropic";
   if (provider === "xiaomi") return "Xiaomi (MiMo)";
+  if (provider === "gemini") return "Gemini";
   if (provider === "glm") return "Z.AI (GLM)";
   if (provider === "moonshot") return "Moonshot";
   if (provider === "minimax") return "MiniMax";

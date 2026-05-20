@@ -10,6 +10,7 @@ import { createLsTool } from "./ls.js";
 import { createSubAgentTool } from "./subagent.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import { createWebSearchTool } from "./web-search.js";
+import { createSourcePathTool } from "./source-path.js";
 import { createTaskOutputTool } from "./task-output.js";
 import { createTaskStopTool } from "./task-stop.js";
 import { createTasksTool } from "./tasks.js";
@@ -68,6 +69,7 @@ export function createTools(cwd: string, opts?: CreateToolsOptions): CreateTools
     createFindTool(cwd),
     createGrepTool(cwd, ops),
     createLsTool(cwd, ops),
+    createSourcePathTool(cwd),
     createWebFetchTool(),
     createTaskOutputTool(processManager),
     createTaskStopTool(processManager),
@@ -116,6 +118,7 @@ export { createGrepTool } from "./grep.js";
 export { createLsTool } from "./ls.js";
 export { createWebFetchTool } from "./web-fetch.js";
 export { createWebSearchTool } from "./web-search.js";
+export { createSourcePathTool } from "./source-path.js";
 export { createTaskOutputTool } from "./task-output.js";
 export { createTaskStopTool } from "./task-stop.js";
 export { createTasksTool } from "./tasks.js";

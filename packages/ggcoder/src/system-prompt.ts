@@ -58,7 +58,7 @@ function renderPlanModeSection(): string {
     `You are in PLAN MODE. Research and design an implementation plan before writing any code.\n\n` +
     `### Workflow\n` +
     `1. Explore: read, grep, find, ls to understand the codebase\n` +
-    `2. Research: \`web_search\` + \`web_fetch\` for docs; for real code, use Explore to discover candidate repos/files/anchors, then SearchCode to verify exact snippets (full usage below)\n` +
+    `2. Research: \`source_path\` for installed dependency source; \`web_search\` + \`web_fetch\` for docs; for real public code, use ReferenceSources for curated starting points or DiscoverRepos for fresh repo discovery, then SearchCode to verify exact snippets (full usage below)\n` +
     `3. Draft: write the plan to .gg/plans/<name>.md\n` +
     `4. Submit: call exit_plan with the plan path\n\n` +
     `### Rules\n` +
@@ -93,9 +93,11 @@ function renderResearchSection(): string {
   return (
     `## Research & Verification\n\n` +
     `Do not assume current APIs, CLI flags, config schema, or error wording — verify.\n\n` +
+    `- **Installed dependency source**: use \`source_path\` before assuming package APIs, types, CLI flags, config schema, framework internals, or runtime behavior. It resolves the package/repo source at the installed lockfile version when possible; inspect the returned path with \`read\`, \`grep\`, \`find\`, or \`ls\`.\n` +
     `- **Docs first**: use \`web_search\` to find authoritative pages, then \`web_fetch\` to read them.\n` +
-    `- **Public code samples**: use \`mcp__kencode-search__exploreCodeSamples\` once early for examples/patterns/ideas/best practices or vague concepts. Treat it as anchor discovery: read its recommended options and copy 3–5 of its follow-up \`searchCode\` calls before inventing new queries.\n` +
-    `- **Exact code search**: use \`mcp__kencode-search__searchCode\` to verify snippets by literal text or RE2 regex only — NOT semantic search. Put code tokens in \`query\`; use \`path\` only for literal file-path substrings and \`repo\` only after a broad/peek search proves the anchor exists. Report Explore-only results as candidates, SearchCode results as verified code.\n` +
+    `- **Curated repo references**: use \`mcp__kencode-search__referenceSources\` before broad research when you need examples, inspiration, architecture, UI patterns, agent/tooling patterns, SaaS/product references, or domain-specific source material. Treat results as repo-only starting points; fetch README/source first, then verify exact code with \`searchCode\`.\n` +
+    `- **Live repo discovery**: use \`mcp__kencode-search__discoverRepos\` when curated references are too narrow or the user asks for current/top repos. It returns repository metadata, not snippets; fetch docs/source and then use \`searchCode\` inside selected repos with concrete anchors.\n` +
+    `- **Exact code search**: use \`mcp__kencode-search__searchCode\` to verify snippets by literal text or RE2 regex only — NOT semantic search. Put code tokens in \`query\`; use \`path\` only for literal file-path substrings and \`repo\` only after a broad/peek search proves the anchor exists. Report ReferenceSources/DiscoverRepos results as candidates, SearchCode results as verified code.\n` +
     `- **Verify after edits**: run relevant checks, read failures, fix them, and never report unrun or failing checks as passing.`
   );
 }

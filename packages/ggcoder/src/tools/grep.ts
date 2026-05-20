@@ -61,6 +61,8 @@ export function createGrepTool(
         dot: false,
         onlyFiles: true,
         ignore: ["**/node_modules/**", "**/.git/**"],
+        suppressErrors: true,
+        followSymbolicLinks: false,
       });
 
       const results: string[] = [];

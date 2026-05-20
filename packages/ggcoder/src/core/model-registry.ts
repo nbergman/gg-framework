@@ -113,6 +113,29 @@ export const MODELS: ModelInfo[] = [
     costTier: "high",
     maxThinkingLevel: "xhigh",
   },
+  // ── Gemini ─────────────────────────────────────────────
+  {
+    id: "gemini-3.1-flash-lite-preview",
+    name: "Gemini 3.1 Flash Lite Preview",
+    provider: "gemini",
+    contextWindow: 1_048_576,
+    maxOutputTokens: 65_536,
+    supportsThinking: true,
+    supportsImages: true,
+    costTier: "low",
+    maxThinkingLevel: "high",
+  },
+  {
+    id: "gemini-3.5-flash",
+    name: "Gemini 3.5 Flash",
+    provider: "gemini",
+    contextWindow: 1_048_576,
+    maxOutputTokens: 65_536,
+    supportsThinking: true,
+    supportsImages: true,
+    costTier: "low",
+    maxThinkingLevel: "high",
+  },
   // ── Moonshot (Kimi) ────────────────────────────────────
   {
     id: "kimi-k2.6",
@@ -243,6 +266,7 @@ export function getModelsForProvider(provider: Provider): ModelInfo[] {
 export function getDefaultModel(provider: Provider): ModelInfo {
   if (provider === "xiaomi") return MODELS.find((m) => m.id === "mimo-v2-pro")!;
   if (provider === "openai") return MODELS.find((m) => m.id === "gpt-5.5")!;
+  if (provider === "gemini") return MODELS.find((m) => m.id === "gemini-3.1-flash-lite-preview")!;
   if (provider === "glm") return MODELS.find((m) => m.id === "glm-5.1")!;
   if (provider === "moonshot") return MODELS.find((m) => m.id === "kimi-k2.6")!;
   if (provider === "minimax") return MODELS.find((m) => m.id === "MiniMax-M2.7")!;
@@ -281,6 +305,7 @@ export function getMaxThinkingLevel(modelId: string): ThinkingLevel {
  * Get the model to use for compaction summarization.
  * - Anthropic: always Sonnet 4.6
  * - OpenAI: cheapest (Codex Mini)
+ * - Gemini: use the current model
  * - GLM: GLM-4.7 Flash (cheap alternative)
  * - Moonshot: use the current model (no cheap alternative)
  */

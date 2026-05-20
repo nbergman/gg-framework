@@ -375,7 +375,7 @@ export class AgentSession {
     const latestUserPrompt = getLatestUserText(this.messages);
     const loopMessages = await this.prepareDynamicContext(latestUserPrompt);
 
-    const runAgentLoop = async (apiKey: string, accountId?: string) => {
+    const runAgentLoop = async (apiKey: string, accountId?: string, projectId?: string) => {
       const modelInfo = getModel(this.model);
       const generator = agentLoop(loopMessages, {
         provider: this.provider,
@@ -388,6 +388,7 @@ export class AgentSession {
         baseUrl: this.baseUrl,
         signal: this.opts.signal,
         accountId,
+        projectId,
         cacheRetention: "short",
         promptCacheKey: this.getPromptCacheKey(),
         supportsImages: modelInfo?.supportsImages,
@@ -405,7 +406,7 @@ export class AgentSession {
     };
 
     try {
-      await runAgentLoop(creds.accessToken, creds.accountId);
+      await runAgentLoop(creds.accessToken, creds.accountId, creds.projectId);
     } catch (err) {
       // Abort errors are expected (user cancellation) — don't retry or re-throw
       if (isAbortError(err) || this.opts.signal?.aborted) {
@@ -429,7 +430,7 @@ export class AgentSession {
         }
         log("INFO", "auth", "Got 401, force-refreshing token and retrying");
         creds = await this.authStorage.resolveCredentials(this.provider, { forceRefresh: true });
-        await runAgentLoop(creds.accessToken, creds.accountId);
+        await runAgentLoop(creds.accessToken, creds.accountId, creds.projectId);
       } else {
         throw err;
       }
@@ -499,6 +500,7 @@ export class AgentSession {
   async compact(existingCredentials?: {
     accessToken: string;
     accountId?: string;
+    projectId?: string;
     baseUrl?: string;
   }): Promise<void> {
     const creds = existingCredentials ?? (await this.authStorage.resolveCredentials(this.provider));
@@ -513,6 +515,7 @@ export class AgentSession {
       model: this.model,
       apiKey: creds.accessToken,
       accountId: creds.accountId,
+      projectId: creds.projectId,
       baseUrl: this.baseUrl ?? creds.baseUrl,
       contextWindow,
       signal: this.opts.signal,
@@ -713,6 +716,7 @@ export class AgentSession {
         model: this.model,
         apiKey: creds.accessToken,
         accountId: creds.accountId,
+        projectId: creds.projectId,
         baseUrl: this.baseUrl ?? creds.baseUrl,
         contextWindow,
         signal: this.opts.signal,

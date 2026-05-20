@@ -12,6 +12,8 @@ export const TOOL_PROMPT_HINTS: Record<string, string> = {
   find: "Find files/dirs by name pattern. Faster than bash find, respects .gitignore.",
   grep: "Regex search across files. Use for usages, definitions, imports.",
   ls: "List directory contents.",
+  source_path:
+    "Resolve installed package/repo source via opensrc. Use before assuming dependency APIs; inspect returned absolute path with read/grep/find/ls.",
   web_fetch: "Fetch a URL (docs, endpoints, external resources).",
   web_search: "Search the web. Use before web_fetch to find pages.",
   task_output: "Read new output from a background process by id.",
@@ -20,8 +22,10 @@ export const TOOL_PROMPT_HINTS: Record<string, string> = {
     "Manage the Ctrl+T task pane (add/list/done/remove). Only when the user explicitly asks. Do NOT auto-run.",
   subagent: "Delegate focused, isolated subtasks (research, parallel exploration).",
   skill: "Invoke a named skill for specialized instructions.",
-  "mcp__kencode-search__exploreCodeSamples":
-    "Explore public code samples for vague goals/examples/best practices. Use once early to discover candidate repos/files and literal anchors; copy 3–5 suggested follow-up searchCode calls before inventing queries. Results are candidates until verified.",
+  "mcp__kencode-search__referenceSources":
+    "Get curated, categorized reference repos for examples, inspiration, architecture, UI, agents, SaaS, workflows, and domain patterns. Repo-only starting points; fetch docs/source, then verify code with searchCode.",
+  "mcp__kencode-search__discoverRepos":
+    "Search GitHub repos live by keyword/language/topic/stars/recency. Use for current/top repos or long-tail discovery; returns metadata, not snippets. Follow with docs/source and searchCode.",
   "mcp__kencode-search__searchCode":
     "Verify public GitHub code by literal text or RE2 regex; NOT semantic. Put code/import/API tokens in `query`; `path` is a literal file-path substring, not a concept. Start broad/peek, then narrow by repo/path. RE2 multi-line needs `(?s)`.",
   enter_plan: "Enter plan mode for read-only research + planning on complex multi-file tasks.",
@@ -37,13 +41,15 @@ export const DEFAULT_TOOL_NAMES: readonly string[] = [
   "find",
   "grep",
   "ls",
+  "source_path",
   "web_fetch",
   "task_output",
   "task_stop",
   "tasks",
   "subagent",
   "skill",
-  "mcp__kencode-search__exploreCodeSamples",
+  "mcp__kencode-search__referenceSources",
+  "mcp__kencode-search__discoverRepos",
   "mcp__kencode-search__searchCode",
   "enter_plan",
   "exit_plan",

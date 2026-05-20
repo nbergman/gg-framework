@@ -133,20 +133,22 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("AGENTS.md / CLAUDE.md override Language Style Packs");
   });
 
-  it("keeps kencode guidance concise while separating exploration from exact search", async () => {
+  it("keeps kencode guidance concise while separating repo discovery from exact search", async () => {
     const cwd = await makeProject();
     const prompt = await buildSystemPrompt(cwd, undefined, false, undefined, [
-      "mcp__kencode-search__exploreCodeSamples",
+      "mcp__kencode-search__referenceSources",
+      "mcp__kencode-search__discoverRepos",
       "mcp__kencode-search__searchCode",
     ]);
     const tools = toolsSection(prompt);
 
-    expect(tools).toContain("discover candidate repos/files and literal anchors");
-    expect(tools).toContain("follow-up searchCode calls");
+    expect(tools).toContain("curated, categorized reference repos");
+    expect(tools).toContain("Search GitHub repos live");
+    expect(tools).toContain("returns metadata, not snippets");
     expect(tools).toContain("literal text or RE2 regex");
     expect(tools).toContain("NOT semantic");
     expect(tools).toContain("path` is a literal file-path substring");
     expect(tools).not.toContain("zero hits, every time");
-    expect(tools.length).toBeLessThan(750);
+    expect(tools.length).toBeLessThan(950);
   });
 });

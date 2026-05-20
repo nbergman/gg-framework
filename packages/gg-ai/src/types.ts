@@ -6,6 +6,7 @@ export type Provider =
   | "anthropic"
   | "xiaomi"
   | "openai"
+  | "gemini"
   | "glm"
   | "moonshot"
   | "minimax"
@@ -240,12 +241,14 @@ export interface StreamOptions {
   signal?: AbortSignal;
   /** Prompt cache retention preference. Providers map this to their supported values. Default: "short". */
   cacheRetention?: CacheRetention;
-  /** Stable per-session cache routing key for providers that support it (OpenAI, Moonshot). */
+  /** Stable per-session cache routing key for providers that support it (OpenAI, Moonshot, Gemini Code Assist). */
   promptCacheKey?: string;
   /** OpenAI service tier for latency-sensitive requests. Only sent to first-party OpenAI API calls. */
   serviceTier?: "auto" | "default" | "flex" | "priority";
   /** OpenAI ChatGPT account ID (from OAuth JWT) for codex endpoint */
   accountId?: string;
+  /** Google Cloud/Code Assist project ID used by Gemini OAuth transport. */
+  projectId?: string;
   /** Enable provider-native web search. Each provider uses its own format:
    *  - Anthropic: server tool `web_search_20250305`
    *  - Moonshot: `builtin_function` `$web_search`

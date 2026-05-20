@@ -4,6 +4,7 @@ import { getAppPaths } from "../config.js";
 import type { OAuthCredentials } from "./oauth/types.js";
 import { refreshAnthropicToken } from "./oauth/anthropic.js";
 import { refreshOpenAIToken } from "./oauth/openai.js";
+import { refreshGeminiToken } from "./oauth/gemini.js";
 import { withFileLock } from "./file-lock.js";
 import { log } from "./logger.js";
 
@@ -141,7 +142,12 @@ export class AuthStorage {
         // Fall through to refresh
       }
 
-      const refreshFn = provider === "anthropic" ? refreshAnthropicToken : refreshOpenAIToken;
+      const refreshFn =
+        provider === "anthropic"
+          ? refreshAnthropicToken
+          : provider === "gemini"
+            ? refreshGeminiToken
+            : refreshOpenAIToken;
       let refreshed: OAuthCredentials;
       try {
         refreshed = await refreshFn(creds.refreshToken);
@@ -164,6 +170,9 @@ export class AuthStorage {
       }
       if (!refreshed.accountId && creds.accountId) {
         refreshed.accountId = creds.accountId;
+      }
+      if (!refreshed.projectId && creds.projectId) {
+        refreshed.projectId = creds.projectId;
       }
       this.data[provider] = refreshed;
       // Write atomically (we already hold the file lock)

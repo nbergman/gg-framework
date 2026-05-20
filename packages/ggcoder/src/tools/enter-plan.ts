@@ -26,6 +26,7 @@ export function createEnterPlanTool(
         "Plan mode activated. You are now in read-only research mode.\n\n" +
         "Allowed actions:\n" +
         "- Use read, grep, find, ls to explore the codebase\n" +
+        "- Use source_path to locate installed dependency source, then inspect it with read/grep/find/ls\n" +
         "- Use web_fetch for documentation and references\n" +
         "- Write your plan to .gg/plans/<name>.md\n\n" +
         "Restricted: bash, edit, write (except .gg/plans/), subagent\n\n" +

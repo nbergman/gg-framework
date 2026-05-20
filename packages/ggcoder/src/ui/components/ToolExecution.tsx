@@ -69,7 +69,7 @@ interface ToolDoneProps {
 type ToolExecutionProps = ToolRunningProps | ToolDoneProps;
 
 /** Tools that use compact one-line summaries instead of showing output. */
-const COMPACT_TOOLS = new Set(["read", "grep", "find", "ls"]);
+const COMPACT_TOOLS = new Set(["read", "grep", "find", "ls", "source_path"]);
 
 /** Tools rendered with the server-tool style (spinner + summary, no output). */
 const SERVER_STYLE_TOOLS = new Set(["web_search"]);
@@ -351,6 +351,11 @@ function getCompactRunningLabel(name: string, _args: Record<string, unknown>): s
       return "Finding files…";
     case "ls":
       return "Listing…";
+    case "source_path": {
+      const packageName = String(_args.package ?? "");
+      const suffix = packageName ? ` for ${packageName}` : "";
+      return `Resolving source${suffix}…`;
+    }
     default:
       return `${name}…`;
   }
@@ -377,6 +382,12 @@ function getCompactDoneLabel(name: string, args: Record<string, unknown>, result
       const lines = result.split("\n").filter((l) => l.length > 0);
       return `Listed ${lines.length} item${lines.length !== 1 ? "s" : ""}`;
     }
+    case "source_path": {
+      const packageName = String(args.package ?? "source");
+      const sourcePath = extractSourcePath(result);
+      const shortSourcePath = sourcePath ? shortenPath(sourcePath) : "source path";
+      return `Resolved ${packageName} → ${shortSourcePath}`;
+    }
     default:
       return name;
   }
@@ -389,6 +400,10 @@ function shortenPath(filePath: string): string {
   const parts = filePath.split("/");
   if (parts.length <= 3) return filePath;
   return "…/" + parts.slice(-2).join("/");
+}
+
+function extractSourcePath(result: string): string | undefined {
+  return result.match(/^Source path:\s*(.+)$/m)?.[1]?.trim();
 }
 
 function getToolHeaderParts(
@@ -429,10 +444,26 @@ function getToolHeaderParts(
       const skillName = String(args.skill ?? "");
       return { label: displayName, detail: skillName };
     }
+    case "task_output":
+      return { label: displayName, detail: String(args.id ?? "") };
+    case "task_stop":
+      return { label: displayName, detail: String(args.id ?? "") };
+    case "enter_plan": {
+      const reason = String(args.reason ?? "");
+      const trunc = reason.length > 50 ? reason.slice(0, 47) + "…" : reason;
+      return { label: displayName, detail: trunc };
+    }
+    case "exit_plan":
+      return { label: displayName, detail: shortenPath(String(args.plan_path ?? "")) };
     case "web_search": {
       const query = String(args.query ?? "");
       const trunc = query.length > 60 ? query.slice(0, 57) + "…" : query;
       return { label: "Web Search", detail: trunc };
+    }
+    case "source_path": {
+      const packageName = String(args.package ?? "");
+      const trunc = packageName.length > 60 ? packageName.slice(0, 57) + "…" : packageName;
+      return { label: displayName, detail: trunc };
     }
     case "web_fetch": {
       const url = String(args.url ?? "");
@@ -483,6 +514,18 @@ function toolDisplayName(name: string): string {
       return "Skill";
     case "web_fetch":
       return "Fetch";
+    case "web_search":
+      return "Web Search";
+    case "task_output":
+      return "Task Output";
+    case "task_stop":
+      return "Task Stop";
+    case "enter_plan":
+      return "Enter Plan";
+    case "exit_plan":
+      return "Exit Plan";
+    case "source_path":
+      return "Source";
     case "tasks":
       return "Task";
     default:
@@ -590,6 +633,16 @@ function getInlineSummary(name: string, result: string, isError: boolean): strin
       if (result.startsWith("Error")) return result.split("\n")[0];
       return `${lines.length} line${lines.length !== 1 ? "s" : ""}`;
     }
+    case "source_path": {
+      const sourcePath = extractSourcePath(result);
+      return sourcePath ? shortenPath(sourcePath) : "resolved";
+    }
+    case "task_stop":
+      return result.split("\n")[0] || "stopped";
+    case "enter_plan":
+      return "activated";
+    case "exit_plan":
+      return result.split("\n")[0] || "submitted";
     case "tasks": {
       // Extract just the task text from results like 'Task added: "Fix bug" (id: abc…)'
       const quoted = result.match(/"([^"]+)"/);
@@ -819,6 +872,25 @@ function buildResultBody(
       }
       return null; // compact display with inline summary
     }
+    case "source_path":
+      return null; // compact display with resolved source path inline
+    case "task_output": {
+      const lines = result.split("\n").filter((l) => l.length > 0);
+      if (lines.length === 0) return null;
+      const display = lines.slice(0, MAX_OUTPUT_LINES);
+      return {
+        lines: display.map((line, i) => (
+          <Text key={i} color={i === 0 ? "#60a5fa" : "#9ca3af"} wrap="wrap">
+            {truncateLine(line, columns)}
+          </Text>
+        )),
+        totalLines: lines.length,
+      };
+    }
+    case "task_stop":
+    case "enter_plan":
+    case "exit_plan":
+      return null; // compact display with inline summary
     case "tasks": {
       const lines = result.split("\n").filter((l) => l.length > 0);
       // Single-line results (add, done, remove) → compact inline display

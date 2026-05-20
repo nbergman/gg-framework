@@ -107,6 +107,7 @@ export async function runInteractive(config: CliConfig): Promise<void> {
         model,
         apiKey: creds.accessToken,
         accountId: creds.accountId,
+        projectId: creds.projectId,
         baseUrl: config.baseUrl ?? creds.baseUrl,
         contextWindow,
       });
@@ -165,6 +166,7 @@ export async function runInteractive(config: CliConfig): Promise<void> {
         baseUrl: config.baseUrl,
         signal: ac.signal,
         accountId: creds.accountId,
+        projectId: creds.projectId,
         // clearToolUses disabled — causes model to output unsolicited context summaries
       });
 

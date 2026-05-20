@@ -543,6 +543,8 @@ async function listCandidateFiles(cwd: string): Promise<string[]> {
     dot: false,
     onlyFiles: true,
     ignore: IGNORE_PATTERNS,
+    suppressErrors: true,
+    followSymbolicLinks: false,
   });
   return entries
     .filter((entry) => !BINARY_EXTENSIONS.has(path.extname(entry).toLowerCase()))
