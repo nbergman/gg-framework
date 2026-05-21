@@ -158,9 +158,9 @@ export class ProcessManager {
     for (const [id, proc] of this.processes) {
       if (this.children.has(id)) {
         killProcessTree(proc.pid);
+        proc.exitCode = proc.exitCode ?? 1;
+        this.children.delete(id);
       }
     }
-    this.processes.clear();
-    this.children.clear();
   }
 }
