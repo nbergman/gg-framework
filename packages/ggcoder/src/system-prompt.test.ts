@@ -279,12 +279,15 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("call `goals status` for the current run first");
     expect(prompt).toContain("before choosing any next action");
     expect(prompt).toContain(
-      "Completion rule: call `goals complete` only when verifier evidence satisfies",
+      "Completion rule: call `goals complete` only when the configured verifier has run as the final pre-audit gate",
     );
+    expect(prompt).toContain("configured verifier has run as the final pre-audit gate");
     expect(prompt).toContain(
       "a final completion audit has compared the actual durable files/logs/results",
     );
-    expect(prompt).toContain("create or resume a Goal worker task to fix the gap");
+    expect(prompt).toContain("let workers use targeted checks while they build/fix/reconcile");
+    expect(prompt).toContain("the read-only final audit may reconcile matching durable proof");
+    expect(prompt).toContain("rerun the configured verifier before final audit");
     expect(prompt).toContain("Forbidden: direct project implementation, `edit`, `write`, `bash`");
     expect(prompt).toContain("Workers and UI-driven verifier execution are the only actors");
     expect(prompt).not.toContain("take a first control-loop action before status");

@@ -354,7 +354,7 @@ describe("App TUI state persistence helpers", () => {
         completionAudit: {
           status: "pass",
           summary:
-            "FINAL_AUDIT_PASS verifier_checked_at=2024-01-01T00:00:00.000Z All findings fixed and residual risks accepted.",
+            "FINAL_AUDIT_PASS verifier_checked_at=2024-01-01T00:00:00.000Z original-goal-prompt GOAL_PLAN All findings fixed and residual risks accepted.",
           checkedAt: "2024-01-01T00:00:01.000Z",
           verifierCheckedAt: "2024-01-01T00:00:00.000Z",
           outputPath: "artifacts/goal-pass.log",
@@ -364,7 +364,7 @@ describe("App TUI state persistence helpers", () => {
 
     expect(progress).toMatchObject({
       title: "Goal passed: Persist goal output",
-      detail: "All findings fixed and residual risks accepted.",
+      detail: "original-goal-prompt GOAL_PLAN All findings fixed and residual risks accepted.",
       summaryRows: expect.arrayContaining([
         { label: "Findings", value: "Fixed setup completeness and verifier gaps." },
         { label: "Work", value: "Audit findings; Fix production gaps" },

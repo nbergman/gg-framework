@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { GoalRun, GoalTask } from "../core/goal-store.js";
 import { canCompleteGoalRun, decideGoalNextAction } from "../core/goal-controller.js";
 import {
+  appendGoalProgressDraft,
   completedItemsWithDurableGoalTerminalProgress,
   formatGoalTerminalProgress,
   nextGoalModeAfterAgentDone,
@@ -126,7 +127,7 @@ function applyCompletionAudit(run: GoalRun): GoalRun {
     status: "passed",
     completionAudit: {
       status: "pass",
-      summary: `FINAL_AUDIT_PASS verifier_checked_at=${verifier.checkedAt}`,
+      summary: `FINAL_AUDIT_PASS verifier_checked_at=${verifier.checkedAt} original-goal-prompt GOAL_PLAN`,
       checkedAt: "2024-01-01T00:00:01.000Z",
       verifierCheckedAt: verifier.checkedAt,
       ...(verifier.outputPath ? { outputPath: verifier.outputPath } : {}),
@@ -144,6 +145,30 @@ function applyCompletionAudit(run: GoalRun): GoalRun {
 }
 
 describe("/goal UI orchestration lifecycle", () => {
+  it("dedupes adjacent identical Goal progress rows", () => {
+    const draft = {
+      kind: "goal_progress" as const,
+      phase: "continuing" as const,
+      title: "Choosing next Goal step: Close remaining /goal reliability gaps",
+      detail: "Latest result is recorded; starting the next worker task or verifier automatically.",
+      status: "ready" as const,
+    };
+    let nextId = 0;
+    const makeId = () => `goal-progress-${nextId++}`;
+
+    const once = appendGoalProgressDraft([], draft, makeId);
+    const twice = appendGoalProgressDraft(once, draft, makeId);
+    const afterDifferentRow = appendGoalProgressDraft(
+      [...twice, { kind: "assistant", id: "assistant-1", text: "Recorded verifier pass." }],
+      draft,
+      makeId,
+    );
+
+    expect(once).toHaveLength(1);
+    expect(twice).toHaveLength(1);
+    expect(afterDifferentRow).toHaveLength(3);
+  });
+
   it("keeps coordinator mode only while Goal continuation work remains", () => {
     expect(
       nextGoalModeAfterAgentDone({

@@ -140,8 +140,15 @@ describe("goal worker failure propagation", () => {
     expect(prompt).toContain(`cwd=${tmpProject}`);
     expect(prompt).toContain("run_id=goal-a");
     expect(prompt).toContain("task_id=task-a");
-    expect(prompt).toContain("create needed scripts/fixtures/harnesses");
+    expect(prompt).toContain("model the intended experience");
+    expect(prompt).toContain("choose the required senses/signals");
+    expect(prompt).toContain(
+      "Create needed scripts/fixtures/harnesses only when they directly observe those signals",
+    );
     expect(prompt).toContain("source_path/docs/kencode real-code research when relevant");
+    expect(prompt).toContain(
+      "do not default to generic tests, scripts, screenshots, benchmarks, or simulations",
+    );
     expect(prompt).toContain("command/file evidence");
     expect(prompt).toContain(
       'goals({ action: "evidence" | "task", run_id: "goal-a", task_id: "task-a"',
@@ -163,6 +170,7 @@ describe("goal worker failure propagation", () => {
     expect(prompt).toContain("task_id=task-456");
     expect(prompt).toContain("Implement typed handoff");
     expect(prompt).toContain("Do not mark the whole goal complete");
+    expect(prompt).toContain("do not rely on narrative or human visual inspection");
   });
 
   it("does not mark empty successful process exit as durable task completion", async () => {

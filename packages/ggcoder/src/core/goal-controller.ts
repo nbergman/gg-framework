@@ -12,9 +12,7 @@ import {
 
 export const DEFAULT_GOAL_TASK_ATTEMPT_LIMIT = 5;
 export const DEFAULT_GOAL_VERIFIER_FIX_LIMIT = 5;
-export const DEFAULT_GOAL_EVIDENCE_RECONCILIATION_LIMIT = 2;
 
-const EVIDENCE_RECONCILIATION_TASK_TITLE = "Reconcile Goal evidence plan";
 const FINAL_COMPLETION_AUDIT_TASK_TITLE = "Audit Goal completion evidence";
 const DEFAULT_GOAL_COMPLETION_AUDIT_LIMIT = 3;
 
@@ -69,7 +67,6 @@ export interface GoalCompletionCheck {
 export interface GoalControllerOptions {
   taskAttemptLimit?: number;
   verifierFixLimit?: number;
-  evidenceReconciliationLimit?: number;
 }
 
 function needsHarnessInstrumentation(run: GoalRun): boolean {
@@ -87,8 +84,53 @@ function referenceMentionTokens(reference: GoalReference): string[] {
     .map((token) => token.toLowerCase());
 }
 
+function requiresGoalReliabilityContract(run: GoalRun): boolean {
+  const fields = [
+    run.goal,
+    ...run.successCriteria,
+    ...(run.references ?? []).map(
+      (reference) => `${reference.id} ${reference.label} ${reference.content ?? ""}`,
+    ),
+    ...run.evidence.map((item) => `${item.label}\n${item.path ?? ""}\n${item.content ?? ""}`),
+  ].join("\n");
+  return /GOAL_PLAN/.test(fields);
+}
+
+function hasOriginalGoalPromptReference(run: GoalRun): boolean {
+  return (run.references ?? []).some(
+    (reference) =>
+      reference.id === "original-goal-prompt" &&
+      reference.kind === "prompt" &&
+      reference.content?.trim(),
+  );
+}
+
+function hasDurableGoalPlan(run: GoalRun): boolean {
+  const fields = [
+    run.goal,
+    ...run.evidence.map((item) => `${item.label}\n${item.path ?? ""}\n${item.content ?? ""}`),
+  ].join("\n");
+  return /GOAL_PLAN/.test(fields) && /research=/.test(fields) && /success=/.test(fields);
+}
+
+function goalPromptDurabilityFailure(run: GoalRun): string | undefined {
+  if (!requiresGoalReliabilityContract(run)) return undefined;
+  if (!hasOriginalGoalPromptReference(run)) {
+    return "Goal is missing durable [original-goal-prompt] reference content.";
+  }
+  if (!hasDurableGoalPlan(run)) {
+    return "Goal is missing durable planner GOAL_PLAN evidence/state.";
+  }
+  return undefined;
+}
+
+function fieldContainsReference(reference: GoalReference, fields: readonly string[]): boolean {
+  const haystack = fields.join("\n").toLowerCase();
+  return referenceMentionTokens(reference).some((token) => haystack.includes(token));
+}
+
 function unacknowledgedGoalReferences(run: GoalRun): GoalReference[] {
-  const haystack = [
+  const setupAndWorkFields = [
     ...run.successCriteria,
     ...run.evidencePlan.map(
       (item) =>
@@ -100,12 +142,26 @@ function unacknowledgedGoalReferences(run: GoalRun): GoalReference[] {
     run.verifier?.command ?? "",
     run.verifier?.lastResult?.summary ?? "",
     run.completionAudit?.summary ?? "",
-  ]
-    .join("\n")
-    .toLowerCase();
-  return referencesRequiringAcknowledgement(run.references ?? []).filter((reference) =>
-    referenceMentionTokens(reference).every((token) => !haystack.includes(token)),
-  );
+  ];
+  const completionFields = [
+    run.verifier?.description ?? "",
+    run.verifier?.command ?? "",
+    run.verifier?.lastResult?.summary ?? "",
+    run.verifier?.lastResult?.outputPath ?? "",
+    run.completionAudit?.summary ?? "",
+    run.completionAudit?.outputPath ?? "",
+  ];
+  return (run.references ?? []).filter((reference) => {
+    if (reference.kind === "prompt") {
+      return (
+        requiresGoalReliabilityContract(run) &&
+        reference.id === "original-goal-prompt" &&
+        !fieldContainsReference(reference, completionFields)
+      );
+    }
+    if (!referencesRequiringAcknowledgement([reference]).length) return false;
+    return !fieldContainsReference(reference, setupAndWorkFields);
+  });
 }
 
 function buildHarnessTaskPrompt(run: GoalRun): string {
@@ -130,17 +186,6 @@ function blockedEvidencePlanReason(run: GoalRun): string | undefined {
 
 function needsEvidenceInstrumentation(run: GoalRun): boolean {
   return unsatisfiedGoalEvidencePlanItems(run).some((item) => item.status === "planned");
-}
-
-function evidenceReconciliationTaskCount(run: GoalRun): number {
-  return run.tasks.filter((task) => task.title === EVIDENCE_RECONCILIATION_TASK_TITLE).length;
-}
-
-function shouldCreateEvidenceReconciliationTask(
-  run: GoalRun,
-  limit = DEFAULT_GOAL_EVIDENCE_RECONCILIATION_LIMIT,
-): boolean {
-  return evidenceReconciliationTaskCount(run) < limit;
 }
 
 export function unsatisfiedGoalEvidencePlanItems(run: GoalRun): GoalRun["evidencePlan"] {
@@ -169,32 +214,6 @@ function evidencePlanItemSatisfiedByDurableEvidence(
     if (item.path && exactTokenReferenced(evidence.content, item.path)) return true;
     return false;
   });
-}
-
-function buildEvidenceReconciliationTaskPrompt(run: GoalRun): string {
-  const missingItems = unsatisfiedGoalEvidencePlanItems(run)
-    .map(
-      (item) =>
-        `- ${item.id} / ${item.label} (${item.mechanism}): ${item.description}${item.command ? `; expected command: ${item.command}` : ""}${item.path ? `; expected artifact: ${item.path}` : ""}`,
-    )
-    .join("\n");
-  const verifier = run.verifier?.lastResult;
-  const recentEvidence = run.evidence
-    .slice(-10)
-    .map(
-      (item) =>
-        `- ${item.label}${item.path ? ` (${item.path})` : ""}: ${(item.content ?? "").slice(0, 240)}`,
-    )
-    .join("\n");
-  return (
-    `Goal: ${run.goal}\n\n` +
-    referencePromptSection(run.references) +
-    `The verifier has already passed, but the durable evidence plan still has unmatched items. Reconcile bookkeeping only; do not implement project changes or rerun broad work unless a small targeted check is required to confirm existing evidence.\n\n` +
-    `Unsatisfied evidence-plan items:\n${missingItems || "- none"}\n\n` +
-    `Verifier result: ${verifier?.status ?? "unknown"}; command: ${verifier?.command ?? run.verifier?.command ?? "not recorded"}; output: ${verifier?.outputPath ?? "not recorded"}; summary: ${verifier?.summary ?? "not recorded"}\n\n` +
-    `Recent durable evidence:\n${recentEvidence || "- none"}\n\n` +
-    `For each unsatisfied item, either record matching durable evidence or update the evidence_plan item to status=ready with a concise evidence summary using the goals tool. If an item truly lacks proof, add the exact minimal worker/verifier task needed. Do not mark the Goal complete; the coordinator will complete it after reconciliation and verifier evidence satisfy the original criteria.`
-  );
 }
 
 export function hasRequiredGoalEvidence(run: GoalRun): GoalCompletionCheck {
@@ -382,6 +401,8 @@ export function canCompleteGoalRun(run: GoalRun): GoalCompletionCheck {
   if (!run.verifier?.command) {
     return { ok: false, reason: "Goal setup is incomplete: verifier command is required." };
   }
+  const promptDurabilityFailure = goalPromptDurabilityFailure(run);
+  if (promptDurabilityFailure) return { ok: false, reason: promptDurabilityFailure };
   const unacknowledgedReferences = unacknowledgedGoalReferences(run);
   if (unacknowledgedReferences.length > 0) {
     return {
@@ -469,7 +490,7 @@ function buildFinalCompletionAuditTaskPrompt(run: GoalRun): string {
     `Latest verifier: status=${verifier?.status ?? "unknown"}; checkedAt=${verifier?.checkedAt ?? "unknown"}; command=${verifier?.command ?? run.verifier?.command ?? "not recorded"}; output=${verifier?.outputPath ?? "not recorded"}; summary=${verifier?.summary ?? "not recorded"}\n\n` +
     `Evidence plan:\n${evidencePlanItems || "- none"}\n\n` +
     `Recent durable evidence:\n${recentEvidence || "- none"}\n\n` +
-    `Read the referenced report/log/source artifacts and compare them with the latest verifier result. If everything matches, record a passing completion audit with the goals tool by using action=audit, verification_status=pass, output_path matching the verifier output when available, and a summary that starts with "FINAL_AUDIT_PASS" and includes "verifier_checked_at=${verifier?.checkedAt ?? "unknown"}". If anything is missing, stale, contradictory, or unverified, create a new pending Goal task with exact instructions to fix it, record evidence describing the mismatch, and leave the audit failing or absent so the coordinator resumes a worker until fixed.`
+    `Read the referenced report/log/source artifacts and compare them with the latest verifier result. The coordinator schedules and records decisions/state; the verifier path/UI/controller executes the configured verifier command as the final pre-audit gate and records goals verify evidence; this final audit records goals audit only after comparing the latest verifier output and references, including [original-goal-prompt] and durable GOAL_PLAN evidence. If an evidence-plan item is still planned but already matched by durable verifier/source/file evidence, update that evidence_plan item to status=ready with a concise evidence summary before recording the audit; if proof is missing, create a new pending Goal task with exact fix instructions and do not pass the audit. If everything matches, record a passing completion audit with the goals tool by using action=audit, verification_status=pass, output_path matching the verifier output when available, and a summary that starts with "FINAL_AUDIT_PASS" and includes "verifier_checked_at=${verifier?.checkedAt ?? "unknown"}", "original-goal-prompt", and "GOAL_PLAN". If anything is missing, stale, contradictory, or unverified, create a new pending Goal task with exact instructions to fix it, record evidence describing the mismatch, and leave the audit failing or absent so the coordinator resumes a worker until fixed.`
   );
 }
 
@@ -583,22 +604,33 @@ export function decideGoalNextAction(
     return { kind: "blocked", reason: blockedEvidence };
   }
 
+  if (
+    run.verifier?.lastResult?.status === "pass" &&
+    latestNonAuditWorkerEvidenceAfterVerifier(run) &&
+    run.verifier?.command
+  ) {
+    return {
+      kind: "run_verifier",
+      command: run.verifier.command,
+      reason:
+        "Latest verifier result is stale after later Goal worker evidence; rerunning configured verifier as the final pre-audit gate.",
+    };
+  }
+
   if (needsEvidenceInstrumentation(run)) {
     if (run.verifier?.lastResult?.status === "pass") {
-      const limit =
-        options.evidenceReconciliationLimit ?? DEFAULT_GOAL_EVIDENCE_RECONCILIATION_LIMIT;
-      if (shouldCreateEvidenceReconciliationTask(run, limit)) {
+      if (shouldCreateFinalAuditTask(run)) {
         return {
           kind: "create_task",
-          title: EVIDENCE_RECONCILIATION_TASK_TITLE,
-          prompt: buildEvidenceReconciliationTaskPrompt(run),
-          reason: `Verifier passed but ${unsatisfiedGoalEvidencePlanItems(run).length} evidence-plan item(s) still need durable reconciliation (${evidenceReconciliationTaskCount(run) + 1}/${limit}).`,
+          title: FINAL_COMPLETION_AUDIT_TASK_TITLE,
+          prompt: buildFinalCompletionAuditTaskPrompt(run),
+          reason: `Verifier passed; final read-only audit must reconcile ${unsatisfiedGoalEvidencePlanItems(run).length} evidence-plan item(s) before the Goal can pass (${finalAuditTaskCount(run) + 1}/${DEFAULT_GOAL_COMPLETION_AUDIT_LIMIT}).`,
         };
       }
       return {
         kind: "blocked",
         reason:
-          "Verifier passed, but the Goal evidence plan is still not satisfied after bounded reconciliation attempts.",
+          "Verifier passed, but final completion audit did not reconcile the Goal evidence plan after bounded attempts.",
       };
     }
     return {
@@ -651,14 +683,6 @@ export function decideGoalNextAction(
   }
 
   if (run.verifier?.lastResult?.status === "pass") {
-    if (latestNonAuditWorkerEvidenceAfterVerifier(run) && run.verifier?.command) {
-      return {
-        kind: "run_verifier",
-        command: run.verifier.command,
-        reason:
-          "Latest verifier result is stale after later Goal worker evidence; rerunning verifier before final completion audit.",
-      };
-    }
     if (shouldCreateFinalAuditTask(run)) {
       return {
         kind: "create_task",

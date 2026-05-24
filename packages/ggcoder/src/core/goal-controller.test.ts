@@ -9,6 +9,23 @@ import {
   shouldClearGoalContinuation,
 } from "./goal-controller.js";
 
+const durablePromptReference = {
+  id: "original-goal-prompt",
+  kind: "prompt" as const,
+  label: "Original Goal prompt",
+  content: "Original /goal prompt requiring durable references and.",
+  source: "user",
+};
+
+const durablePlanEvidence = {
+  id: "planner-plan",
+  kind: "summary" as const,
+  label: "Planner GOAL_PLAN",
+  content:
+    "GOAL_PLAN\nresearch=local\nfacts=goal-controller.ts\nsuccess=durable prompt and durable plan\nproof=contract test\nsetup=references verifier audit\nEND_GOAL_PLAN",
+  createdAt: "2024-01-01T00:00:00.000Z",
+};
+
 function goalRun(overrides: Partial<GoalRun> = {}): GoalRun {
   return {
     id: "goal-a",
@@ -43,8 +60,9 @@ function goalRun(overrides: Partial<GoalRun> = {}): GoalRun {
         checkedAt: "2024-01-01T00:00:02.000Z",
       },
     },
+    references: [durablePromptReference],
     tasks: [],
-    evidence: [],
+    evidence: [durablePlanEvidence],
     blockers: [],
     ...overrides,
   };
@@ -57,7 +75,7 @@ function withPassingCompletionAudit(run: GoalRun): GoalRun {
     ...run,
     completionAudit: {
       status: "pass",
-      summary: `FINAL_AUDIT_PASS verifier_checked_at=${verifier.checkedAt} output=${verifier.outputPath ?? "inline"}`,
+      summary: `FINAL_AUDIT_PASS verifier_checked_at=${verifier.checkedAt} output=${verifier.outputPath ?? "inline"} original-goal-prompt GOAL_PLAN`,
       checkedAt: "2024-01-01T00:00:03.000Z",
       verifierCheckedAt: verifier.checkedAt,
       ...(verifier.outputPath ? { outputPath: verifier.outputPath } : {}),
@@ -66,6 +84,97 @@ function withPassingCompletionAudit(run: GoalRun): GoalRun {
 }
 
 describe("goal controller", () => {
+  it("blocks completion when mandatory non-prompt references are silently ignored", () => {
+    const ignored = withPassingCompletionAudit(
+      goalRun({
+        references: [
+          {
+            id: "original-goal-prompt",
+            kind: "prompt",
+            label: "Original Goal prompt",
+            content: "Fix feature based off X, Y, Z with supplied references.",
+            source: "user",
+          },
+          {
+            id: "repo-reference",
+            kind: "repo",
+            label: "Reference repository https://github.com/acme/product-reference",
+            value: "https://github.com/acme/product-reference",
+          },
+          {
+            id: "image-reference",
+            kind: "image",
+            label: "Attached image reference liked-ui.png",
+            path: ".gg/goal-references/image-liked-ui.png",
+          },
+          {
+            id: "text-reference",
+            kind: "text",
+            label: "Attached text reference feature-fix-x-y-z.md",
+            path: ".gg/goal-references/text-feature-fix-x-y-z.md",
+            content: "X: keyboard flow, Y: empty state copy, Z: error recovery.",
+          },
+        ],
+      }),
+    );
+
+    expect(canCompleteGoalRun(ignored)).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("Goal references are not covered"),
+    });
+    expect(canCompleteGoalRun(ignored).reason).toContain("Reference repository");
+    expect(canCompleteGoalRun(ignored).reason).toContain("Attached image reference");
+    expect(canCompleteGoalRun(ignored).reason).toContain("Attached text reference");
+
+    const covered = withPassingCompletionAudit(
+      goalRun({
+        successCriteria: [
+          "Worker task prompts and setup criteria must mention repo-reference, image-reference, text-reference, and the X/Y/Z feature-fix document.",
+        ],
+        evidencePlan: [
+          {
+            id: "reference-proof",
+            label: "repo-reference/image-reference/text-reference evidence plan paths",
+            mechanism: "test",
+            description:
+              "Proves mandatory URL/repo, screenshot/image, attached text document, and X/Y/Z feature-fix references are carried into proof paths.",
+            status: "ready",
+            evidence: "reference-proof ready",
+            path: ".goal-evidence/reference-proof.log",
+          },
+        ],
+        verifier: {
+          description:
+            "Verifier covers repo-reference, image-reference, text-reference, and feature-fix-x-y-z.md.",
+          command: "pnpm vitest goal-references.test.ts goal-controller.test.ts",
+          lastResult: {
+            status: "pass",
+            summary: "passed repo-reference image-reference text-reference feature-fix-x-y-z.md",
+            command: "pnpm vitest goal-references.test.ts goal-controller.test.ts",
+            outputPath: ".goal-evidence/reference-proof.log",
+            checkedAt: "2024-01-01T00:00:02.000Z",
+          },
+        },
+        tasks: [
+          {
+            id: "worker-task",
+            title: "Use mandatory references",
+            prompt:
+              "Implement using repo-reference, image-reference at .gg/goal-references/image-liked-ui.png, and text-reference at .gg/goal-references/text-feature-fix-x-y-z.md for X/Y/Z.",
+            status: "done",
+            attempts: 1,
+          },
+        ],
+        references: ignored.references,
+      }),
+    );
+
+    expect(canCompleteGoalRun(covered)).toEqual({
+      ok: true,
+      reason: "All tasks are done, verifier evidence passed, and final completion audit passed.",
+    });
+  });
+
   it("starts the next pending worker task deterministically", () => {
     const task = {
       id: "task-a",
@@ -251,7 +360,7 @@ describe("goal controller", () => {
     });
   });
 
-  it("creates bounded evidence reconciliation work after verifier success", () => {
+  it("uses final audit to reconcile planned evidence after verifier success", () => {
     const decision = decideGoalNextAction(
       goalRun({
         tasks: [{ id: "task-a", title: "Done", prompt: "Done", status: "done", attempts: 1 }],
@@ -278,12 +387,15 @@ describe("goal controller", () => {
     );
     expect(decision).toMatchObject({
       kind: "create_task",
-      title: "Reconcile Goal evidence plan",
+      title: "Audit Goal completion evidence",
       reason:
-        "Verifier passed but 1 evidence-plan item(s) still need durable reconciliation (1/2).",
+        "Verifier passed; final read-only audit must reconcile 1 evidence-plan item(s) before the Goal can pass (1/3).",
     });
     expect(decision.kind === "create_task" ? decision.prompt : "").toContain(
-      "Reconcile bookkeeping only",
+      "final pre-audit gate",
+    );
+    expect(decision.kind === "create_task" ? decision.prompt : "").toContain(
+      "update that evidence_plan item to status=ready",
     );
   });
 
@@ -327,7 +439,7 @@ describe("goal controller", () => {
     });
     expect(decideGoalNextAction(run)).toMatchObject({
       kind: "create_task",
-      title: "Reconcile Goal evidence plan",
+      title: "Audit Goal completion evidence",
     });
   });
 
@@ -362,7 +474,7 @@ describe("goal controller", () => {
     });
   });
 
-  it("creates reconciliation work for real blocked-after-pass evidence-plan labels", () => {
+  it("uses final audit for real blocked-after-pass evidence-plan labels", () => {
     const decision = decideGoalNextAction(
       goalRun({
         tasks: [{ id: "task-a", title: "Done", prompt: "Done", status: "done", attempts: 1 }],
@@ -419,7 +531,7 @@ describe("goal controller", () => {
     );
     expect(decision).toMatchObject({
       kind: "create_task",
-      title: "Reconcile Goal evidence plan",
+      title: "Audit Goal completion evidence",
     });
     expect(decision.kind === "create_task" ? decision.prompt : "").toContain(
       "slash-wrapper-evidence / /goal slash wrapper evidence",
@@ -429,17 +541,17 @@ describe("goal controller", () => {
     );
   });
 
-  it("blocks after bounded evidence reconciliation attempts are exhausted", () => {
-    const reconcileTask = {
-      id: "reconcile-a",
-      title: "Reconcile Goal evidence plan",
-      prompt: "Reconcile evidence",
+  it("blocks after bounded final audit attempts fail to reconcile evidence", () => {
+    const auditTask = {
+      id: "audit-a",
+      title: "Audit Goal completion evidence",
+      prompt: "Audit evidence",
       status: "done" as const,
       attempts: 1,
     };
     const decision = decideGoalNextAction(
       goalRun({
-        tasks: [reconcileTask, { ...reconcileTask, id: "reconcile-b" }],
+        tasks: [auditTask, { ...auditTask, id: "audit-b" }, { ...auditTask, id: "audit-c" }],
         evidencePlan: [
           {
             id: "proof",
@@ -464,7 +576,7 @@ describe("goal controller", () => {
     expect(decision).toEqual({
       kind: "blocked",
       reason:
-        "Verifier passed, but the Goal evidence plan is still not satisfied after bounded reconciliation attempts.",
+        "Verifier passed, but final completion audit did not reconcile the Goal evidence plan after bounded attempts.",
     });
   });
 
@@ -714,7 +826,7 @@ describe("goal controller", () => {
         command: "pnpm test",
         lastResult: {
           status: "pass",
-          summary: "passed",
+          summary: "passed original-goal-prompt GOAL_PLAN",
           checkedAt: "2024-01-01T00:00:02.000Z",
           outputPath: "artifacts/verifier.log",
         },
@@ -722,7 +834,7 @@ describe("goal controller", () => {
       completionAudit: {
         status: "pass",
         summary:
-          "FINAL_AUDIT_PASS verifier_checked_at=2024-01-01T00:00:01.000Z artifact=artifacts/verifier.log",
+          "FINAL_AUDIT_PASS verifier_checked_at=2024-01-01T00:00:01.000Z artifact=artifacts/verifier.log original-goal-prompt GOAL_PLAN",
         checkedAt: "2024-01-01T00:00:03.000Z",
         verifierCheckedAt: "2024-01-01T00:00:01.000Z",
         outputPath: "artifacts/verifier.log",
@@ -747,7 +859,7 @@ describe("goal controller", () => {
         command: "pnpm test",
         lastResult: {
           status: "pass",
-          summary: "passed",
+          summary: "passed original-goal-prompt GOAL_PLAN",
           checkedAt: "2024-01-01T00:00:00.000Z",
         },
       },
@@ -791,14 +903,15 @@ describe("goal controller", () => {
         command: "pnpm test",
         lastResult: {
           status: "pass",
-          summary: "passed",
+          summary: "passed original-goal-prompt GOAL_PLAN",
           command: "pnpm test",
           checkedAt: "2024-01-01T00:00:00.000Z",
         },
       },
       completionAudit: {
         status: "pass",
-        summary: "FINAL_AUDIT_PASS verifier_checked_at=2024-01-01T00:00:00.000Z",
+        summary:
+          "FINAL_AUDIT_PASS verifier_checked_at=2024-01-01T00:00:00.000Z original-goal-prompt GOAL_PLAN",
         checkedAt: "2024-01-01T00:00:03.000Z",
         verifierCheckedAt: "2024-01-01T00:00:00.000Z",
       },
@@ -813,7 +926,7 @@ describe("goal controller", () => {
       kind: "run_verifier",
       command: "pnpm test",
       reason:
-        "Latest verifier result is stale after later Goal worker evidence; rerunning verifier before final completion audit.",
+        "Latest verifier result is stale after later Goal worker evidence; rerunning configured verifier as the final pre-audit gate.",
     });
   });
 
@@ -828,7 +941,7 @@ describe("goal controller", () => {
         command: "pnpm test",
         lastResult: {
           status: "pass",
-          summary: "passed",
+          summary: "passed original-goal-prompt GOAL_PLAN",
           checkedAt: "2024-01-01T00:00:00.000Z",
         },
       },

@@ -291,7 +291,7 @@ describe("goal overlay helpers", () => {
       },
       completionAudit: {
         status: "pass",
-        summary: "FINAL_AUDIT_PASS All findings fixed.",
+        summary: "FINAL_AUDIT_PASS original-goal-prompt GOAL_PLAN All findings fixed.",
         checkedAt: "2024-01-01T00:00:01.000Z",
         verifierCheckedAt: "2024-01-01T00:00:00.000Z",
       },

@@ -320,14 +320,53 @@ function referencesAcknowledged(
   });
 }
 
+function hasOriginalGoalPromptReference(references: readonly GoalReference[] | undefined): boolean {
+  return (references ?? []).some(
+    (reference) =>
+      reference.id === "original-goal-prompt" &&
+      reference.kind === "prompt" &&
+      reference.content?.trim(),
+  );
+}
+
 function setupBlockersForRun(run: {
   successCriteria: readonly string[];
   evidencePlan: readonly GoalRun["evidencePlan"][number][];
   verifier?: GoalRun["verifier"];
   references?: readonly GoalReference[];
   tasks: readonly GoalRun["tasks"][number][];
+  evidence?: readonly GoalRun["evidence"][number][];
+  goal?: string;
 }): string[] {
   const blockers: string[] = [];
+  const contractFields = [
+    run.goal ?? "",
+    ...run.successCriteria,
+    ...(run.references ?? []).map(
+      (reference) => `${reference.id} ${reference.label} ${reference.content ?? ""}`,
+    ),
+    ...(run.evidence ?? []).map(
+      (item) => `${item.label}\n${item.path ?? ""}\n${item.content ?? ""}`,
+    ),
+  ].join("\n");
+  const requiresReliabilityContract = /GOAL_PLAN/.test(contractFields);
+  if (requiresReliabilityContract && !hasOriginalGoalPromptReference(run.references)) {
+    blockers.push(`${SETUP_BLOCKER_PREFIX} durable [original-goal-prompt] reference is required.`);
+  }
+  const plannerFields = [
+    run.goal ?? "",
+    ...(run.evidence ?? []).map(
+      (item) => `${item.label}\n${item.path ?? ""}\n${item.content ?? ""}`,
+    ),
+  ].join("\n");
+  if (
+    requiresReliabilityContract &&
+    (!/GOAL_PLAN/.test(plannerFields) ||
+      !/research=/.test(plannerFields) ||
+      !/success=/.test(plannerFields))
+  ) {
+    blockers.push(`${SETUP_BLOCKER_PREFIX} durable planner GOAL_PLAN evidence/state is required.`);
+  }
   if (run.successCriteria.length === 0)
     blockers.push(`${SETUP_BLOCKER_PREFIX} success criteria are required.`);
   if (run.evidencePlan.length === 0)
@@ -382,6 +421,21 @@ function validatePassAuditContract(
   }
   if (!outputPath && !summary.match(/(?:output|artifact|log|path)=\S+/)) {
     return "pass audit must include output_path or an output/artifact/log/path reference in the summary.";
+  }
+  const contractFields = [
+    run.goal,
+    ...run.successCriteria,
+    ...(run.references ?? []).map(
+      (reference) => `${reference.id} ${reference.label} ${reference.content ?? ""}`,
+    ),
+    ...run.evidence.map((item) => `${item.label}\n${item.path ?? ""}\n${item.content ?? ""}`),
+  ].join("\n");
+  const requiresReliabilityContract = /GOAL_PLAN/.test(contractFields);
+  if (requiresReliabilityContract && !summary.includes("original-goal-prompt")) {
+    return "pass audit summary must explicitly reference original-goal-prompt.";
+  }
+  if (requiresReliabilityContract && !summary.includes("GOAL_PLAN")) {
+    return "pass audit summary must explicitly reference durable GOAL_PLAN evidence.";
   }
   if (!referencesAcknowledged(run.references, [summary, outputPath ?? ""])) {
     return "pass audit summary or output_path must explicitly reference every non-prompt Goal reference id, label, URL, or path.";
@@ -455,11 +509,22 @@ export function createGoalsTool(
           const hasBlockingPrerequisites =
             missingPrerequisites !== "Goal has no missing user prerequisites.";
           const references = [...(getGoalReferences?.() ?? existing?.references ?? [])];
+          const plannerEvidence = args.summary?.includes("GOAL_PLAN")
+            ? [
+                createGoalEvidence({
+                  kind: "summary",
+                  label: "Planner GOAL_PLAN",
+                  content: args.summary,
+                }),
+              ]
+            : undefined;
           const draftProbe = {
+            goal: args.goal,
             successCriteria: args.success_criteria ?? existing?.successCriteria ?? [],
             evidencePlan: evidencePlan ?? existing?.evidencePlan ?? [],
             references,
             tasks: existing?.tasks ?? [],
+            evidence: plannerEvidence ?? existing?.evidence ?? [],
             verifier,
           };
           const setupBlockers = setupBlockersForRun(draftProbe);
@@ -485,6 +550,7 @@ export function createGoalsTool(
             harness: harness ?? existing?.harness ?? [],
             evidencePlan: draftProbe.evidencePlan,
             references: draftProbe.references,
+            ...(plannerEvidence ? { evidence: plannerEvidence } : {}),
             ...(verifier ? { verifier } : {}),
             blockers,
           });

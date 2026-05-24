@@ -42,11 +42,11 @@ async function runDurableToolLifecycleHarness() {
       verifier_command: "test -f fixture.txt",
     });
     await executeGoalHarnessTool(tmpProject, { action: "task", run_id: "goal-e2e-tool-run", task_id: "work", task_title: "Local work", task_prompt: "No-op local work", task_status: "done", attempts: 1, summary: "work complete" });
+    await executeGoalHarnessTool(tmpProject, { action: "evidence_plan", run_id: "goal-e2e-tool-run", evidence_plan_item_id: "fixture-proof", evidence_plan_status: "ready", summary: "Fixture proof passed", evidence_path: "fixture.txt" });
     await executeGoalHarnessTool(tmpProject, { action: "verify", run_id: "goal-e2e-tool-run", verification_status: "pass", summary: "Fixture proof passed", exit_code: 0, output_path: "fixture.txt" });
     let run = await getGoalRun(tmpProject, "goal-e2e-tool-run");
     assert.equal(run?.status, "ready", "verifier pass waits for final audit");
     assert.equal(run?.prerequisites[0]?.status, "met", "safe prerequisite command ran");
-    await executeGoalHarnessTool(tmpProject, { action: "task", run_id: "goal-e2e-tool-run", task_id: "audit", task_title: "Audit Goal completion evidence", task_prompt: "Audit durable artifacts", task_status: "done", attempts: 1, summary: "audit complete" });
     const checkedAt = run?.verifier?.lastResult?.checkedAt;
     assert.ok(checkedAt, "verifier checkedAt persisted");
     await executeGoalHarnessTool(tmpProject, { action: "audit", run_id: "goal-e2e-tool-run", verification_status: "pass", summary: `FINAL_AUDIT_PASS verifier_checked_at=${checkedAt}; artifact=fixture.txt`, output_path: "fixture.txt" });
@@ -65,6 +65,113 @@ async function runDurableToolLifecycleHarness() {
 }
 
 await runDurableToolLifecycleHarness();
+
+async function runFullAzReliabilityContractHarness() {
+  const previousGoalsBase = process.env.GG_GOALS_BASE;
+  const tmpBase = await fs.mkdtemp(path.join(os.tmpdir(), "goal-az-base-"));
+  const tmpProject = await fs.mkdtemp(path.join(os.tmpdir(), "goal-az-project-"));
+  process.env.GG_GOALS_BASE = tmpBase;
+  try {
+    const originalPrompt = "Improve feature X/Y/Z using https://github.com/acme/product-reference and attached screenshot/instructions.";
+    const goalPlan = "GOAL_PLAN\nresearch=local\nfacts=goal-store.ts goal-references.ts goals.ts system-prompt.ts goal-controller.ts package scripts\nsuccess=original prompt durable; GOAL_PLAN durable; verifier handoff clear; A-Z contract\nproof=domain-agnostic durable state verifier audit contract\nsetup=references worker proof verifier final audit\nEND_GOAL_PLAN";
+    const screenshotPath = ".gg/goal-references/image-liked-ui.png";
+    const xyzPath = ".gg/goal-references/text-feature-fix-x-y-z.md";
+    await fs.mkdir(path.join(tmpProject, ".gg/goal-references"), { recursive: true });
+    await fs.writeFile(path.join(tmpProject, screenshotPath), "fake-png", "utf-8");
+    await fs.writeFile(path.join(tmpProject, xyzPath), "X: keyboard flow\nY: empty state copy\nZ: error recovery\n", "utf-8");
+    await executeGoalHarnessTool(tmpProject, {
+      action: "create",
+      run_id: "goal-az-contract-run",
+      title: "A-Z reliability contract",
+      goal: `${originalPrompt}\n\n${goalPlan}`,
+      summary: goalPlan,
+      success_criteria: [
+        "original-goal-prompt, repo-reference, image-reference, text-reference, and GOAL_PLAN are durable and acknowledged",
+        "worker proof, verifier pass, final audit, and completion all align domain-agnostic durable state",
+      ],
+      evidence_plan: [
+        {
+          id: "az-proof",
+          label: "A-Z domain-agnostic proof for original-goal-prompt repo-reference image-reference text-reference GOAL_PLAN",
+          mechanism: "command",
+          description: `Proves durable state references original-goal-prompt, repo-reference, image-reference at ${screenshotPath}, text-reference at ${xyzPath}, and X/Y/Z instructions`,
+          status: "ready",
+          command: "node scripts/verify-az-contract.mjs",
+          path: "az-proof.log",
+          evidence: "original-goal-prompt repo-reference image-reference text-reference GOAL_PLAN X/Y/Z ready",
+        },
+      ],
+      verifier_command: "node scripts/verify-az-contract.mjs",
+      verifier_description: "Verifier covers original-goal-prompt, GOAL_PLAN, repo-reference, image-reference, text-reference, and X/Y/Z feature instructions.",
+    });
+    let run = await getGoalRun(tmpProject, "goal-az-contract-run");
+    assert.equal(run?.status, "draft", "setup remains draft until references are durable");
+    await executeGoalHarnessTool(tmpProject, {
+      action: "create",
+      run_id: "goal-az-contract-run",
+      title: "A-Z reliability contract",
+      goal: `${originalPrompt}\n\n${goalPlan}`,
+      summary: goalPlan,
+      success_criteria: run?.successCriteria,
+      evidence_plan: run?.evidencePlan,
+      verifier_command: run?.verifier?.command,
+      verifier_description: run?.verifier?.description,
+    });
+    run = await getGoalRun(tmpProject, "goal-az-contract-run");
+    run = await import("../src/core/goal-store.js").then(({ upsertGoalRun }) => upsertGoalRun(tmpProject, {
+      ...run!,
+      status: "ready",
+      references: [
+        { id: "original-goal-prompt", kind: "prompt", label: "Original Goal prompt", content: originalPrompt, source: "user" },
+        { id: "repo-reference", kind: "repo", label: "Reference repository https://github.com/acme/product-reference", value: "https://github.com/acme/product-reference" },
+        { id: "image-reference", kind: "image", label: "Attached image reference liked-ui.png", path: screenshotPath },
+        { id: "text-reference", kind: "text", label: "Attached X/Y/Z feature instructions", path: xyzPath, content: "X: keyboard flow, Y: empty state copy, Z: error recovery" },
+      ],
+    }));
+    assert.ok(run.evidence.some((item) => item.label === "Planner GOAL_PLAN" && item.content?.includes("GOAL_PLAN")), "planner GOAL_PLAN persisted as evidence");
+    await executeGoalHarnessTool(tmpProject, {
+      action: "task",
+      run_id: run.id,
+      task_id: "worker-proof",
+      task_title: "Worker proof for original-goal-prompt repo-reference image-reference text-reference GOAL_PLAN",
+      task_prompt: `Read original-goal-prompt and GOAL_PLAN, compare repo-reference https://github.com/acme/product-reference, image-reference ${screenshotPath}, and text-reference ${xyzPath} for X/Y/Z.`,
+      task_status: "done",
+      attempts: 1,
+      summary: "Worker proof covered repo-reference image-reference text-reference X/Y/Z",
+    });
+    await executeGoalHarnessTool(tmpProject, {
+      action: "verify",
+      run_id: run.id,
+      verification_status: "pass",
+      summary: "Verifier passed original-goal-prompt GOAL_PLAN repo-reference image-reference text-reference X/Y/Z",
+      exit_code: 0,
+      output_path: "az-proof.log",
+    });
+    run = await getGoalRun(tmpProject, run.id);
+    const checkedAt = run?.verifier?.lastResult?.checkedAt;
+    assert.ok(checkedAt, "verifier pass persisted checkedAt");
+    assert.equal(run?.status, "ready", "verifier pass waits for final audit");
+    await executeGoalHarnessTool(tmpProject, {
+      action: "audit",
+      run_id: run!.id,
+      verification_status: "pass",
+      summary: `FINAL_AUDIT_PASS verifier_checked_at=${checkedAt}; artifact=az-proof.log; original-goal-prompt GOAL_PLAN repo-reference image-reference text-reference X/Y/Z`,
+      output_path: "az-proof.log",
+    });
+    await executeGoalHarnessTool(tmpProject, { action: "complete", run_id: run!.id });
+    run = await getGoalRun(tmpProject, run!.id);
+    if (run?.status !== "passed") throw new Error(`A-Z completion failed: ${canCompleteGoalRun(run as GoalRun).reason}`);
+    assert.equal(canCompleteGoalRun(run as GoalRun).ok, true, "completion contract accepts full A-Z run");
+  } finally {
+    if (previousGoalsBase === undefined) delete process.env.GG_GOALS_BASE;
+    else process.env.GG_GOALS_BASE = previousGoalsBase;
+    await fs.rm(tmpBase, { recursive: true, force: true });
+    await fs.rm(tmpProject, { recursive: true, force: true });
+  }
+}
+
+await runFullAzReliabilityContractHarness();
+
 
 function baseRun(overrides: Partial<GoalRun> = {}): GoalRun {
   return {
@@ -191,4 +298,4 @@ assert.equal(parsedPass?.status, "pass");
 const terminalRun = baseRun({ status: "passed" });
 assertDecision(terminalRun, "terminal", "passed run remains terminal");
 
-console.log("Goal lifecycle harness passed: prerequisites blocked, evidence planned/blocked, worker and verifier events parsed, verifier fail fixes, ready run verifies, final audit gates completion, complete run completes.");
+console.log("Goal lifecycle harness passed: prerequisites blocked, evidence planned/blocked, worker and verifier events parsed, verifier fail fixes, ready run verifies, final audit gates completion, complete run completes, and planner output → setup → references → worker proof → verifier pass → final audit → completion A-Z contract passes.");
