@@ -52,6 +52,14 @@ export interface GoalEvidenceStateSnapshot {
   path?: string;
 }
 
+export interface GoalReferenceStateSnapshot {
+  id: string;
+  kind: NonNullable<GoalRun["references"]>[number]["kind"];
+  label: string;
+  value?: string;
+  path?: string;
+}
+
 export interface GoalStateSnapshot {
   status: GoalRun["status"];
   userPrerequisites: string;
@@ -59,6 +67,7 @@ export interface GoalStateSnapshot {
   blockers: string[];
   prerequisites: GoalPrerequisiteStateSnapshot[];
   evidencePlan: GoalEvidencePlanStateSnapshot[];
+  references: GoalReferenceStateSnapshot[];
   tasks: GoalTaskStateSnapshot[];
   evidenceCount: number;
   latestEvidence?: GoalEvidenceStateSnapshot;
@@ -120,8 +129,8 @@ export interface GoalSyntheticEventInfo {
 const GOAL_ORCHESTRATOR_INSTRUCTIONS = `coordinator_instructions:
 1. Call goals({ action: "status", run_id }) before deciding.
 2. Briefly say what you are doing as the coordinator so the chat shows progress.
-3. Inspect durable tasks, verifier state, blockers, and evidence.
-4. Take exactly one next control-loop action: add/update the next Goal task, run/record verification, run/record the final completion audit, pause/block with evidence, or complete only if verifier plus final-audit evidence proves the success criteria.
+3. Inspect durable tasks, verifier state, blockers, and evidence. Also inspect Goal references.
+4. Take exactly one next control-loop action: add/update the next Goal task, run/record verification, run/record the final completion audit, pause/block with evidence, or complete only if verifier plus final-audit evidence proves the success criteria and mandatory references.
 5. Do not merely narrate and do not ask the user to open the Goal pane.`;
 
 function headerValue(value: string): string {
@@ -170,6 +179,13 @@ export function buildGoalStateSnapshot(run: GoalRun): GoalStateSnapshot {
       ...(item.path ? { path: item.path } : {}),
       ...(item.evidence ? { evidence: item.evidence } : {}),
     })),
+    references: (run.references ?? []).map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      label: item.label,
+      ...(item.value ? { value: item.value } : {}),
+      ...(item.path ? { path: item.path } : {}),
+    })),
     tasks: run.tasks.map((task) => ({
       id: task.id,
       title: task.title,
@@ -213,10 +229,18 @@ function formatGoalState(snapshot: GoalStateSnapshot): string {
   const evidencePlan = snapshot.evidencePlan.length
     ? snapshot.evidencePlan.map((item) => `- ${item.id}: ${item.status}; ${item.label}`).join("\n")
     : "(none)";
+  const references = snapshot.references.length
+    ? snapshot.references
+        .map(
+          (item) =>
+            `- ${item.id}: ${item.kind}; ${item.label}${item.value ? `; value=${item.value}` : ""}${item.path ? `; path=${item.path}` : ""}`,
+        )
+        .join("\n")
+    : "(none)";
   const latestEvidence = snapshot.latestEvidence
     ? `${snapshot.latestEvidence.label}${snapshot.latestEvidence.path ? ` (${snapshot.latestEvidence.path})` : ""}`
     : "(none)";
-  return `current_goal_state:\nstatus: ${snapshot.status}\nuser_prerequisites: ${snapshot.userPrerequisites}\nverifier: ${verifier}\nevidence_count: ${snapshot.evidenceCount}\nlatest_evidence: ${latestEvidence}\nblockers:\n${blockers}\nprerequisites:\n${prerequisites}\nevidence_plan:\n${evidencePlan}\ntasks:\n${tasks}`;
+  return `current_goal_state:\nstatus: ${snapshot.status}\nuser_prerequisites: ${snapshot.userPrerequisites}\nverifier: ${verifier}\nevidence_count: ${snapshot.evidenceCount}\nlatest_evidence: ${latestEvidence}\nblockers:\n${blockers}\nprerequisites:\n${prerequisites}\nevidence_plan:\n${evidencePlan}\nreferences:\n${references}\ntasks:\n${tasks}`;
 }
 
 export function buildGoalWorkerSyntheticEventPayload(

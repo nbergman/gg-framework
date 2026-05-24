@@ -9,6 +9,7 @@ import { BLACK_CIRCLE } from "../constants/figures.js";
 
 // BLACK_CIRCLE + " " = 2 chars
 const PREFIX_WIDTH = 2;
+const MAX_STREAMING_PREVIEW_LINES = 12;
 
 interface StreamingAreaProps {
   isRunning: boolean;
@@ -16,6 +17,26 @@ interface StreamingAreaProps {
   streamingThinking: string;
   showThinking?: boolean;
   thinkingMs?: number;
+}
+
+interface StreamingTextPreview {
+  text: string;
+  isTruncated: boolean;
+}
+
+function estimateWrappedLineCount(text: string, width: number): number {
+  return text
+    .split("\n")
+    .reduce((count, line) => count + Math.max(1, Math.ceil(line.length / width)), 0);
+}
+
+export function getStreamingTextPreview(text: string, width: number): StreamingTextPreview {
+  const safeWidth = Math.max(10, width);
+  if (estimateWrappedLineCount(text, safeWidth) <= MAX_STREAMING_PREVIEW_LINES) {
+    return { text, isTruncated: false };
+  }
+
+  return { text: "", isTruncated: true };
 }
 
 export const StreamingArea = memo(function StreamingArea({
@@ -27,7 +48,7 @@ export const StreamingArea = memo(function StreamingArea({
 }: StreamingAreaProps) {
   const theme = useTheme();
   const { columns } = useTerminalSize();
-  const contentWidth = Math.max(10, columns - PREFIX_WIDTH);
+  const contentWidth = Math.max(10, columns - PREFIX_WIDTH - 1);
   const displayText = useMemo(
     () => (streamingText ? stripDoneMarkers(streamingText) : ""),
     [streamingText],
@@ -41,22 +62,35 @@ export const StreamingArea = memo(function StreamingArea({
   // Trim because a streaming turn whose entire content is "[DONE:N]" gets
   // reduced to a single space by stripDoneMarkers — don't render a lone "⏺".
   const trimmedDisplay = displayText.trim();
+  const preview = useMemo(
+    () => getStreamingTextPreview(trimmedDisplay, contentWidth),
+    [trimmedDisplay, contentWidth],
+  );
   const hasThinking = showThinking && !!streamingThinking;
   if (!trimmedDisplay && !hasThinking) return null;
   if (!isRunning && !trimmedDisplay) return null;
 
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column">
       {hasThinking && <ThinkingBlock text={streamingThinking} streaming durationMs={thinkingMs} />}
 
       {trimmedDisplay && (
-        <Box flexDirection="row">
+        <Box flexDirection="row" paddingLeft={1}>
           <Box width={PREFIX_WIDTH} flexShrink={0}>
             <Text color={theme.primary}>{BLACK_CIRCLE + " "}</Text>
           </Box>
           <Box flexDirection="column" flexGrow={1} width={contentWidth}>
+            {preview.isTruncated ? (
+              <Text color={theme.textDim} wrap="wrap">
+                {"… streaming long response; full answer will print once complete."}
+              </Text>
+            ) : null}
             {/* Stable/unstable split: only re-parses the tail block. */}
-            <StreamingMarkdown width={contentWidth}>{trimmedDisplay}</StreamingMarkdown>
+            {preview.text ? (
+              <StreamingMarkdown width={contentWidth} compact>
+                {preview.text}
+              </StreamingMarkdown>
+            ) : null}
           </Box>
         </Box>
       )}

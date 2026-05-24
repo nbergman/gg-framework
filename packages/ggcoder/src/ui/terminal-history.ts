@@ -12,6 +12,7 @@ import type { Theme } from "./theme/theme.js";
 import { tokensToAnsi } from "./utils/token-to-ansi.js";
 import { containsMarkdownSyntax } from "./utils/markdown-cache.js";
 import { getUserMessageDisplayParts } from "./utils/user-message-display.js";
+import { buildToolGroupSummary, segmentsToPlainText } from "./tool-group-summary.js";
 
 const LOGO_LINES = [" ▄▀▀▀ ▄▀▀▀", " █ ▀█ █ ▀█", " ▀▄▄▀ ▀▄▄▀"];
 const GRADIENT = [
@@ -32,8 +33,12 @@ const GAP = "   ";
 const LOGO_WIDTH = 9;
 const SIDE_BY_SIDE_MIN = LOGO_WIDTH + GAP.length + 20;
 const MAX_OUTPUT_LINES = 4;
-const USER_MESSAGE_BACKGROUND = "#808080";
-const USER_MESSAGE_TEXT = "#ffffff";
+const USER_MESSAGE_BACKGROUND = "#374151";
+const USER_MESSAGE_PREFIX = "> ";
+const USER_MESSAGE_TOP_FILL = "▄";
+const USER_MESSAGE_BOTTOM_FILL = "▀";
+const USER_MESSAGE_HORIZONTAL_PADDING = 2;
+const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\u001B\[[0-?]*[ -/]*[@-~]`, "gu");
 const COMPACT_TOOLS = new Set(["read", "grep", "find", "ls", "source_path"]);
 const STATE_TOOLS = new Set(["tasks", "goals"]);
 const SERVER_STYLE_TOOLS = new Set(["web_search"]);
@@ -66,7 +71,6 @@ export function createTerminalHistoryPrinter({
   stream = process.stdout,
 }: TerminalHistoryPrinterOptions = {}): TerminalHistoryPrinter {
   const printed = new Set<string>();
-  let previousWriteEndedWithBlankLine = false;
 
   return {
     print(items, context, options) {
@@ -76,22 +80,19 @@ export function createTerminalHistoryPrinter({
         const output = serializeCompletedItemToTerminalHistory(item, context);
         const endsWithBlankLine = item.kind === "banner";
         const formatted = formatHistoryWrite(output, {
-          leadingSeparator: !previousWriteEndedWithBlankLine,
+          leadingSeparator: false,
           trailingBlankLine: endsWithBlankLine,
         });
         if (formatted.length === 0) continue;
         printed.add(item.id);
         writeOutput(formatted);
-        previousWriteEndedWithBlankLine = endsWithBlankLine;
       }
     },
     clear() {
       printed.clear();
-      previousWriteEndedWithBlankLine = false;
     },
     resetPrinted() {
       printed.clear();
-      previousWriteEndedWithBlankLine = false;
     },
     get printedIds() {
       return printed;
@@ -138,13 +139,13 @@ export function serializeCompletedItemToTerminalHistory(
     case "error":
       return renderError(item.headline, item.message, item.guidance, context);
     case "info":
-      return dim(context, wrapPlain(item.text, context.columns));
+      return color(context.theme.commandColor, wrapPlain(item.text, context.columns));
     case "style_pack":
       return renderStylePack(item.added, item.showSetupHint, context);
     case "setup_hint":
       return renderSetupHint(context);
     case "update_notice":
-      return line(context, context.theme.success, `✨ ${item.text}`, true);
+      return line(context, context.theme.commandColor, `✨ ${item.text}`, true);
     case "compacting":
       return renderCompacting(context);
     case "compacted":
@@ -158,24 +159,24 @@ export function serializeCompletedItemToTerminalHistory(
     case "duration":
       return dim(context, `✻ ${item.verb} ${formatDuration(item.durationMs)}`);
     case "plan_transition":
-      return line(context, context.theme.planPrimary, `● ${item.text}`, true);
+      return line(context, context.theme.commandColor, `● ${item.text}`, true);
     case "goal_agent_transition":
-      return line(context, context.theme.success, `● ${item.text}`, true);
+      return line(context, context.theme.commandColor, `● ${item.text}`, true);
     case "thinking_transition":
       return line(
         context,
-        item.active ? context.theme.accent : context.theme.textDim,
+        item.active ? context.theme.commandColor : context.theme.textDim,
         `✻ ${item.active ? "Thinking ON" : "Thinking OFF"}`,
         true,
       );
     case "model_transition":
-      return `${color(context.theme.secondary, "▸", true)} ${dim(context, "Switched to ")}${color(context.theme.primary, item.modelName, true)}`;
+      return `${color(context.theme.commandColor, "▸", true)} ${dim(context, "Switched to ")}${color(context.theme.commandColor, item.modelName, true)}`;
     case "theme_transition":
-      return `${color(context.theme.secondary, "◐", true)} ${dim(context, "Theme switched to ")}${color(context.theme.primary, item.themeName, true)}`;
+      return `${color(context.theme.commandColor, "◐", true)} ${dim(context, "Theme switched to ")}${color(context.theme.commandColor, item.themeName, true)}`;
     case "plan_event":
       return renderPlanEvent(item.event, item.detail, context);
     case "stopped":
-      return dim(context, `⊘ ${item.text}`);
+      return color(context.theme.commandColor, `⊘ ${item.text}`, true);
     case "step_done":
       return renderStepDone(item.stepNum, item.description, context);
     case "tombstone":
@@ -223,6 +224,10 @@ function renderBanner(context: TerminalHistoryContext): string {
   ]);
 }
 
+function stripAnsi(value: string): string {
+  return value.replace(ANSI_ESCAPE_PATTERN, "");
+}
+
 function renderUser(
   text: string,
   imageCount: number | undefined,
@@ -232,33 +237,37 @@ function renderUser(
   const imageBadges = Array.from({ length: imageCount ?? 0 }, (_, index) =>
     userChipSegment(`[Image #${index + 1}]`, context.theme.accent),
   );
-  const separator = userChipSegment(" ", USER_MESSAGE_TEXT);
+  const userMessageText = context.theme.commandColor;
+  const separator = userChipSegment(" ", userMessageText);
   const content = [
     ...getUserMessageDisplayParts(text, pasteInfo).map((part) =>
-      userChipSegment(part.text, part.kind === "paste" ? context.theme.textDim : USER_MESSAGE_TEXT),
+      userChipSegment(part.text, part.kind === "paste" ? context.theme.textDim : userMessageText),
     ),
     ...imageBadges,
   ]
     .filter((part) => part.length > 0)
     .join(separator);
-  const wrapped = wrapAnsi(
-    content || userChipSegment("(empty)", USER_MESSAGE_TEXT),
-    Math.max(10, context.columns - 2),
-    {
-      hard: true,
-      wordWrap: true,
-    },
+  const messageWidth = Math.max(10, context.columns);
+  const contentWidth = Math.max(
+    1,
+    messageWidth - USER_MESSAGE_HORIZONTAL_PADDING - USER_MESSAGE_PREFIX.length,
   );
-  return wrapped
-    .split("\n")
-    .map((lineText, index) => {
-      const prefix =
-        index === 0
-          ? userChipSegment("❯ ", context.theme.inputPrompt, true)
-          : userChipSegment("  ", USER_MESSAGE_TEXT);
-      return `${prefix}${lineText}`;
-    })
-    .join("\n");
+  const wrapped = wrapAnsi(content || userChipSegment("(empty)", userMessageText), contentWidth, {
+    hard: true,
+    wordWrap: true,
+  });
+  const top = chalk.hex(USER_MESSAGE_BACKGROUND)(USER_MESSAGE_TOP_FILL.repeat(messageWidth));
+  const bottom = chalk.hex(USER_MESSAGE_BACKGROUND)(USER_MESSAGE_BOTTOM_FILL.repeat(messageWidth));
+  const rows = wrapped.split("\n").map((lineText, index) => {
+    const prefix =
+      index === 0
+        ? userChipSegment(USER_MESSAGE_PREFIX, userMessageText, true)
+        : userChipSegment(" ".repeat(USER_MESSAGE_PREFIX.length), userMessageText);
+    const line = `${userChipSegment(" ", userMessageText)}${prefix}${lineText}`;
+    const fillWidth = Math.max(0, messageWidth - stringWidth(stripAnsi(line)));
+    return `${line}${userChipSegment(" ".repeat(fillWidth), userMessageText)}`;
+  });
+  return [top, ...rows, bottom].join("\n");
 }
 
 function renderQueued(
@@ -287,7 +296,7 @@ function renderAssistant(
   }
   const body = markdownToAnsi(text, context).trim();
   if (body.length > 0) {
-    lines.push(prefixFirstLine(body, `${color(context.theme.primary, BLACK_CIRCLE)} `, "  "));
+    lines.push(prefixFirstLine(body, ` ${color(context.theme.primary, BLACK_CIRCLE)} `, "   "));
   }
   return block(lines);
 }
@@ -380,27 +389,15 @@ function renderToolGroup(
   }[],
   context: TerminalHistoryContext,
 ): string {
-  const lines = tools.map((tool) => {
-    if (COMPACT_TOOLS.has(tool.name) && tool.status === "running") {
-      return toolHeader("running", getCompactRunningLabel(tool.name, tool.args), "", context);
-    }
-    if (COMPACT_TOOLS.has(tool.name) && tool.status === "done" && !tool.isError) {
-      return toolHeader(
-        "done",
-        getCompactDoneLabel(tool.name, tool.args, tool.result ?? ""),
-        "",
-        context,
-      );
-    }
-    const { label, detail } = getToolHeaderParts(tool.name, tool.args);
-    return toolHeader(
-      tool.status === "done" ? (tool.isError ? "error" : "done") : "running",
-      label,
-      detail,
-      context,
-    );
-  });
-  return block(lines);
+  const allDone = tools.every((tool) => tool.status === "done");
+  const hasError = tools.some((tool) => tool.isError);
+  const status = allDone ? (hasError ? "error" : "done") : "running";
+  return toolHeader(
+    status,
+    segmentsToPlainText(buildToolGroupSummary(tools, allDone)),
+    "",
+    context,
+  );
 }
 
 function renderServerToolStart(
@@ -586,7 +583,7 @@ function renderPlanEvent(
     rejected: "Plan rejected",
     dismissed: "Plan dismissed",
   } satisfies Record<typeof event, string>;
-  const lines = [color(context.theme.planPrimary, `○ ${labels[event]}`, true)];
+  const lines = [color(context.theme.commandColor, `○ ${labels[event]}`, true)];
   if (detail) lines[0] += dim(context, ` — "${detail}"`);
   return block(lines);
 }
@@ -773,7 +770,7 @@ function markdownToAnsi(text: string, context: TerminalHistoryContext): string {
   } else {
     tokens = marked.lexer(text);
   }
-  return tokensToAnsi(tokens, context.theme, Math.max(20, context.columns - 1));
+  return tokensToAnsi(tokens, context.theme, Math.max(20, context.columns - 2));
 }
 
 function formatDuration(ms: number): string {

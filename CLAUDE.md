@@ -121,17 +121,19 @@ If `npm i` gets ETARGET after publishing, clear cache: `npm cache clean --force`
 - OAuth flows → `core/oauth/`, one file per provider
 - Tests → co-located with source files
 
-## Code Quality — Zero Tolerance
+## Code Quality
 
-After editing ANY file, run:
+Run targeted verification that is appropriate to the change before calling work complete. Do not run the full quality suite after every edit by default; reserve it for broad code changes, release work, or when explicitly requested.
+
+For full verification, use:
 
 ```bash
 pnpm check && pnpm lint && pnpm format:check
 ```
 
-After code changes, also run `pnpm build`; otherwise compiled outputs won't take effect.
+After code changes that need compiled outputs, also run `pnpm build`.
 
-Fix ALL errors before continuing. Quick fixes:
+Fix errors from checks you do run before continuing. Quick fixes:
 - `pnpm lint:fix` — auto-fix ESLint issues
 - `pnpm format` — auto-fix Prettier formatting
 - Use `/fix` to run all checks and spawn parallel agents to fix issues

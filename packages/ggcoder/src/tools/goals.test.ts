@@ -5,7 +5,7 @@ import path from "node:path";
 import type { ToolExecuteResult } from "@kenkaiiii/gg-agent";
 import { createGoalsTool } from "./goals.js";
 import { decideGoalNextAction } from "../core/goal-controller.js";
-import { getGoalRun, upsertGoalRun } from "../core/goal-store.js";
+import { getGoalRun, upsertGoalRun, type GoalReference } from "../core/goal-store.js";
 
 let tmpBase: string;
 let tmpProject: string;
@@ -224,6 +224,143 @@ describe("goals tool state guards", () => {
     } finally {
       await fs.rm(runProject, { recursive: true, force: true });
     }
+  });
+
+  it("persists active Goal references and requires worker task prompts to name them", async () => {
+    const reference: GoalReference = {
+      id: "repo-reference",
+      kind: "repo",
+      label: "Reference repository https://github.com/acme/reference-ui",
+      value: "https://github.com/acme/reference-ui",
+    };
+    const tool = createGoalsTool(tmpProject, undefined, () => [reference]);
+
+    await tool.execute(
+      {
+        action: "create",
+        run_id: "reference-goal",
+        title: "Match reference repo",
+        goal: "Implement the UI from the reference repository",
+        success_criteria: ["Implementation matches repo-reference visual and interaction patterns"],
+        evidence_plan: [
+          {
+            id: "reference-comparison",
+            label: "repo-reference comparison",
+            mechanism: "source",
+            description: "Compare against repo-reference before completion",
+            status: "ready",
+            evidence: "reference captured",
+          },
+        ],
+        verifier_command: "pnpm test",
+        verifier_description: "Verifier compares output against repo-reference",
+      },
+      { signal: new AbortController().signal, toolCallId: "test-call" },
+    );
+
+    const missingReferenceResult = await tool.execute(
+      {
+        action: "task",
+        run_id: "reference-goal",
+        task_id: "generic-task",
+        task_title: "Implement UI",
+        task_prompt: "Build the requested UI.",
+        task_status: "pending",
+      },
+      { signal: new AbortController().signal, toolCallId: "test-call" },
+    );
+    const referencedTaskResult = await tool.execute(
+      {
+        action: "task",
+        run_id: "reference-goal",
+        task_id: "reference-task",
+        task_title: "Implement UI from repo-reference",
+        task_prompt:
+          "Use repo-reference / https://github.com/acme/reference-ui as the source of truth while implementing.",
+        task_status: "pending",
+      },
+      { signal: new AbortController().signal, toolCallId: "test-call" },
+    );
+    const run = await getGoalRun(tmpProject, "reference-goal");
+
+    expect(missingReferenceResult).toContain("task_prompt must explicitly include");
+    expect(referencedTaskResult).toBe('Goal task added: "Implement UI from repo-reference".');
+    expect(run?.status).toBe("ready");
+    expect(run?.references).toEqual(expect.arrayContaining([expect.objectContaining(reference)]));
+    expect(run?.tasks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "reference-task" })]),
+    );
+  });
+
+  it("rejects passing final audits that omit mandatory Goal references", async () => {
+    const reference: GoalReference = {
+      id: "image-reference",
+      kind: "image",
+      label: "Attached image reference mockup.png",
+      path: ".gg/goal-references/image-reference-mockup.png",
+    };
+    const tool = createGoalsTool(tmpProject, undefined, () => [reference]);
+    await tool.execute(
+      {
+        action: "create",
+        run_id: "reference-audit-goal",
+        title: "Match screenshot",
+        goal: "Implement UI from screenshot",
+        success_criteria: ["UI matches image-reference"],
+        evidence_plan: [
+          {
+            id: "image-reference-proof",
+            label: "image-reference comparison",
+            mechanism: "screenshot",
+            description: "Compare output with image-reference",
+            status: "ready",
+            evidence: "comparison configured",
+          },
+        ],
+        verifier_command: "pnpm test",
+        verifier_description: "Verifier checks image-reference",
+      },
+      { signal: new AbortController().signal, toolCallId: "test-call" },
+    );
+    await tool.execute(
+      {
+        action: "verify",
+        run_id: "reference-audit-goal",
+        verification_status: "pass",
+        summary: "Verifier passed for image-reference",
+        exit_code: 0,
+        output_path: "artifacts/verifier.log",
+      },
+      { signal: new AbortController().signal, toolCallId: "test-call" },
+    );
+    const checkedAt = (await getGoalRun(tmpProject, "reference-audit-goal"))?.verifier?.lastResult
+      ?.checkedAt;
+
+    const missingReferenceAudit = await tool.execute(
+      {
+        action: "audit",
+        run_id: "reference-audit-goal",
+        verification_status: "pass",
+        summary: `FINAL_AUDIT_PASS verifier_checked_at=${checkedAt}; output=artifacts/verifier.log`,
+        output_path: "artifacts/verifier.log",
+      },
+      { signal: new AbortController().signal, toolCallId: "test-call" },
+    );
+    const referencedAudit = await tool.execute(
+      {
+        action: "audit",
+        run_id: "reference-audit-goal",
+        verification_status: "pass",
+        summary: `FINAL_AUDIT_PASS verifier_checked_at=${checkedAt}; image-reference output=artifacts/verifier.log`,
+        output_path: "artifacts/verifier.log",
+      },
+      { signal: new AbortController().signal, toolCallId: "test-call" },
+    );
+
+    expect(missingReferenceAudit).toContain(
+      "must explicitly reference every non-prompt Goal reference",
+    );
+    expect(referencedAudit).toBe('Completion audit recorded for "Match screenshot": pass.');
   });
 
   it("preserves task title and prompt when updating task status by id", async () => {

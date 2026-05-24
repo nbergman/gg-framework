@@ -16,9 +16,11 @@ import { markdownAnsiCache, containsMarkdownSyntax } from "../utils/markdown-cac
 export const Markdown = React.memo(function Markdown({
   children,
   width: explicitWidth,
+  compact = false,
 }: {
   children: string;
   width?: number;
+  compact?: boolean;
 }) {
   const theme = useTheme();
   const { stdout } = useStdout();
@@ -134,9 +136,11 @@ export const Markdown = React.memo(function Markdown({
     return result;
   }, [stabilised.body, theme, columns]);
 
+  const displayOutput = compact ? ansiOutput.replace(/\n+$/u, "") : ansiOutput;
+
   return (
     <Box ref={ref} flexDirection="column" flexShrink={1}>
-      <Text>{ansiOutput}</Text>
+      <Text>{displayOutput}</Text>
       {stabilised.trailingFragment && <Text>{stabilised.trailingFragment}</Text>}
     </Box>
   );
@@ -186,9 +190,11 @@ function stabilize(text: string): string {
 export const StreamingMarkdown = React.memo(function StreamingMarkdown({
   children,
   width,
+  compact = false,
 }: {
   children: string;
   width: number;
+  compact?: boolean;
 }) {
   const stableBoundaryRef = useRef(0);
 
@@ -231,8 +237,16 @@ export const StreamingMarkdown = React.memo(function StreamingMarkdown({
 
   return (
     <Box flexDirection="column" gap={1}>
-      {stablePrefix && <Markdown width={width}>{stablePrefix}</Markdown>}
-      {unstableSuffix && <Markdown width={width}>{unstableSuffix}</Markdown>}
+      {stablePrefix && (
+        <Markdown width={width} compact={compact}>
+          {stablePrefix}
+        </Markdown>
+      )}
+      {unstableSuffix && (
+        <Markdown width={width} compact={compact}>
+          {unstableSuffix}
+        </Markdown>
+      )}
     </Box>
   );
 });

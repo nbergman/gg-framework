@@ -24,7 +24,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({
 }: AssistantMessageProps) {
   const theme = useTheme();
   const { columns } = useTerminalSize();
-  const contentWidth = Math.max(10, columns - PREFIX_WIDTH);
+  const contentWidth = Math.max(10, columns - PREFIX_WIDTH - 1);
 
   // Trim because stripDoneMarkers leaves a single space when an assistant
   // turn was JUST a [DONE:N] marker — we don't want a lone "⏺" rendered
@@ -35,15 +35,15 @@ export const AssistantMessage = React.memo(function AssistantMessage({
   if (!trimmedText && !hasThinking) return null;
 
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column">
       {hasThinking && <ThinkingBlock text={thinking!} durationMs={thinkingMs} />}
       {trimmedText && (
-        <Box flexDirection="row">
+        <Box flexDirection="row" paddingLeft={1}>
           <Box width={PREFIX_WIDTH} flexShrink={0}>
             <Text color={theme.primary}>{BLACK_CIRCLE + " "}</Text>
           </Box>
           <Box flexDirection="column" flexGrow={1} width={contentWidth}>
-            <Markdown>{trimmedText}</Markdown>
+            <Markdown compact>{trimmedText}</Markdown>
           </Box>
         </Box>
       )}

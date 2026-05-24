@@ -1,9 +1,14 @@
 import {
   formatGoalBlockingPrerequisites,
   goalHasBlockingPrerequisites,
+  type GoalReference,
   type GoalRun,
   type GoalTask,
 } from "./goal-store.js";
+import {
+  formatGoalReferencesForPrompt,
+  referencesRequiringAcknowledgement,
+} from "./goal-references.js";
 
 export const DEFAULT_GOAL_TASK_ATTEMPT_LIMIT = 5;
 export const DEFAULT_GOAL_VERIFIER_FIX_LIMIT = 5;
@@ -71,6 +76,38 @@ function needsHarnessInstrumentation(run: GoalRun): boolean {
   return run.harness.some((item) => !item.command && !item.path);
 }
 
+function referencePromptSection(references: readonly GoalReference[] | undefined): string {
+  const section = formatGoalReferencesForPrompt(references ?? []);
+  return section ? `${section}\n\n` : "";
+}
+
+function referenceMentionTokens(reference: GoalReference): string[] {
+  return [reference.id, reference.label, reference.value, reference.path]
+    .filter((token): token is string => !!token?.trim())
+    .map((token) => token.toLowerCase());
+}
+
+function unacknowledgedGoalReferences(run: GoalRun): GoalReference[] {
+  const haystack = [
+    ...run.successCriteria,
+    ...run.evidencePlan.map(
+      (item) =>
+        `${item.id} ${item.label} ${item.description} ${item.command ?? ""} ${item.path ?? ""} ${item.evidence ?? ""}`,
+    ),
+    ...run.tasks.map((task) => `${task.title} ${task.prompt} ${task.lastSummary ?? ""}`),
+    ...run.evidence.map((item) => `${item.label} ${item.path ?? ""} ${item.content ?? ""}`),
+    run.verifier?.description ?? "",
+    run.verifier?.command ?? "",
+    run.verifier?.lastResult?.summary ?? "",
+    run.completionAudit?.summary ?? "",
+  ]
+    .join("\n")
+    .toLowerCase();
+  return referencesRequiringAcknowledgement(run.references ?? []).filter((reference) =>
+    referenceMentionTokens(reference).every((token) => !haystack.includes(token)),
+  );
+}
+
 function buildHarnessTaskPrompt(run: GoalRun): string {
   const harnessItems = run.harness
     .filter((item) => !item.command && !item.path)
@@ -78,6 +115,7 @@ function buildHarnessTaskPrompt(run: GoalRun): string {
     .join("\n");
   return (
     `Goal: ${run.goal}\n\n` +
+    referencePromptSection(run.references) +
     `Build only the missing local/free harness instrumentation needed before verification. Start by restating the intended experience, the relevant failure modes, and the senses/signals this harness must observe; do not default to generic tests, scripts, screenshots, benchmarks, or simulations unless that signal is required for this specific goal.\n` +
     `${harnessItems}\n\n` +
     `Inventory available local capabilities just deeply enough to choose a proportional instrument, then build it. Update the Goal harness/verifier metadata with the goals tool and record durable evidence showing the instrument exists and works. Do not require paid services or signups; block only with exact user instructions if a true external prerequisite is missing.`
@@ -150,6 +188,7 @@ function buildEvidenceReconciliationTaskPrompt(run: GoalRun): string {
     .join("\n");
   return (
     `Goal: ${run.goal}\n\n` +
+    referencePromptSection(run.references) +
     `The verifier has already passed, but the durable evidence plan still has unmatched items. Reconcile bookkeeping only; do not implement project changes or rerun broad work unless a small targeted check is required to confirm existing evidence.\n\n` +
     `Unsatisfied evidence-plan items:\n${missingItems || "- none"}\n\n` +
     `Verifier result: ${verifier?.status ?? "unknown"}; command: ${verifier?.command ?? run.verifier?.command ?? "not recorded"}; output: ${verifier?.outputPath ?? "not recorded"}; summary: ${verifier?.summary ?? "not recorded"}\n\n` +
@@ -303,6 +342,7 @@ function buildEvidencePlanTaskPrompt(run: GoalRun): string {
     .join("\n");
   return (
     `Goal: ${run.goal}\n\n` +
+    referencePromptSection(run.references) +
     `Turn the planned proof paths below into real local/free verification capability before the Goal verifier runs. For each path, preserve the orchestrator's goal-specific sensory intent: what experience is being observed, what failure it catches, and what signal proves it.\n` +
     `${plannedItems}\n\n` +
     `Inventory available local capabilities without anchoring on any fixed tool category. Build only the proportional instrument needed for this proof path, update the Goal evidence_plan/harness/verifier metadata with the goals tool, and persist concrete command/file/artifact/log evidence that the instrument works. Do not use narrative-only verification or human visual inspection as completion evidence. Only block with exact user instructions for inputs that cannot be generated or checked locally.`
@@ -312,7 +352,8 @@ function buildEvidencePlanTaskPrompt(run: GoalRun): string {
 function buildVerifierTaskPrompt(run: GoalRun): string {
   return (
     `Goal: ${run.goal}\n\n` +
-    `Define and build a real end-to-end verifier for this Goal. Begin from the intended experience and required senses/signals already implied by the success criteria and evidence plan. Choose a proportional local/free verifier that observes those signals and catches the important goal-specific failures; do not add generic simulations, screenshots, benchmarks, or scripts unless they directly support that proof. Update the Goal with a verifier_command and verifier_description using the goals tool. The verifier must be runnable locally/free and produce durable command or file evidence, not narrative or human visual inspection. If an external prerequisite is missing, mark it missing with exact user instructions.`
+    referencePromptSection(run.references) +
+    `Define and build a real end-to-end verifier for this Goal. Begin from the intended experience and required senses/signals already implied by the success criteria and evidence plan, including mandatory Goal references. Choose a proportional local/free verifier that observes those signals and catches the important goal-specific failures; do not add generic simulations, screenshots, benchmarks, or scripts unless they directly support that proof. Update the Goal with a verifier_command and verifier_description using the goals tool. The verifier must be runnable locally/free and produce durable command or file evidence, not narrative or human visual inspection. If an external prerequisite is missing, mark it missing with exact user instructions.`
   );
 }
 
@@ -340,6 +381,13 @@ export function canCompleteGoalRun(run: GoalRun): GoalCompletionCheck {
   }
   if (!run.verifier?.command) {
     return { ok: false, reason: "Goal setup is incomplete: verifier command is required." };
+  }
+  const unacknowledgedReferences = unacknowledgedGoalReferences(run);
+  if (unacknowledgedReferences.length > 0) {
+    return {
+      ok: false,
+      reason: `Goal references are not covered by criteria/tasks/evidence/verifier/audit: ${unacknowledgedReferences.map((item) => item.label).join(", ")}.`,
+    };
   }
   if (goalHasBlockingPrerequisites(run)) {
     return { ok: false, reason: formatGoalBlockingPrerequisites(run) };
@@ -415,7 +463,8 @@ function buildFinalCompletionAuditTaskPrompt(run: GoalRun): string {
     .join("\n");
   return (
     `Goal: ${run.goal}\n\n` +
-    `You are the final read-only Goal completion auditor. Do not edit files, do not run broad implementation work, do not mark the Goal complete, and do not trust worker summaries by themselves. Verify the original success criteria against actual durable artifacts after the latest verifier pass.\n\n` +
+    referencePromptSection(run.references) +
+    `You are the final read-only Goal completion auditor. Do not edit files, do not run broad implementation work, do not mark the Goal complete, and do not trust worker summaries by themselves. Verify the original success criteria and every mandatory Goal reference against actual durable artifacts after the latest verifier pass.\n\n` +
     `Success criteria:\n${run.successCriteria.map((item) => `- ${item}`).join("\n") || "- none recorded"}\n\n` +
     `Latest verifier: status=${verifier?.status ?? "unknown"}; checkedAt=${verifier?.checkedAt ?? "unknown"}; command=${verifier?.command ?? run.verifier?.command ?? "not recorded"}; output=${verifier?.outputPath ?? "not recorded"}; summary=${verifier?.summary ?? "not recorded"}\n\n` +
     `Evidence plan:\n${evidencePlanItems || "- none"}\n\n` +
@@ -438,6 +487,7 @@ function buildVerifierFailureTaskPrompt(run: GoalRun): string {
   const attempt = verifierFixTaskCount(run) + 1;
   return (
     `Original objective: ${run.goal}\n\n` +
+    referencePromptSection(run.references) +
     `Success criteria:\n${run.successCriteria.map((item) => `- ${item}`).join("\n") || "- none recorded"}\n\n` +
     `Verifier command: ${run.verifier?.command ?? "(missing)"}\n` +
     `Exit code: ${result?.exitCode ?? "unknown"}\n` +

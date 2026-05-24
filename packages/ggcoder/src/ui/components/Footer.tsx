@@ -156,6 +156,45 @@ export function getFooterRightLength({
   );
 }
 
+export function doesFooterFitOnOneLine({
+  columns,
+  model,
+  tokensIn,
+  contextWindowOptions,
+  cwd,
+  gitBranch,
+  thinkingLevel,
+  goalMode = "off",
+  statusBelow,
+}: {
+  columns: number;
+  model: string;
+  tokensIn: number;
+  contextWindowOptions?: ContextWindowOptions;
+  cwd: string;
+  gitBranch?: string | null;
+  thinkingLevel?: ThinkingLevel;
+  goalMode?: GoalMode;
+  statusBelow?: boolean;
+}): boolean {
+  if (statusBelow) return false;
+  const parts = cwd.split("/").filter(Boolean);
+  const displayPath = parts.length > 0 ? parts[parts.length - 1] : cwd;
+  const contextPct = getContextPercent(model, tokensIn, contextWindowOptions);
+  const modelName = getShortModelName(model);
+  const thinkingText = thinkingLevel ? `Thinking ${thinkingLevel}` : "Thinking off";
+  const goalText = getGoalFooterLabel(goalMode);
+  const leftLen = displayPath.length + 2 + (gitBranch ? gitBranch.length + 5 : 0);
+  const rightLen = getFooterRightLength({
+    barWidth: 8,
+    contextPct,
+    modelName,
+    goalText,
+    thinkingText,
+  });
+  return leftLen + rightLen <= columns - 2;
+}
+
 export function Footer({
   model,
   tokensIn,
@@ -223,7 +262,6 @@ export function Footer({
   const shimmerGoal = goalActive && !reducedMotion;
 
   // Calculate whether everything fits on one line
-  const leftLen = displayPath.length + 2 + (gitBranch ? gitBranch.length + 5 : 0);
   const rightLen = getFooterRightLength({
     barWidth,
     contextPct,
@@ -232,7 +270,17 @@ export function Footer({
     thinkingText,
   });
   const availableWidth = columns - 2;
-  const fitsOnOneLine = leftLen + rightLen <= availableWidth;
+  const fitsOnOneLine = doesFooterFitOnOneLine({
+    columns,
+    model,
+    tokensIn,
+    contextWindowOptions,
+    cwd,
+    gitBranch,
+    thinkingLevel,
+    goalMode,
+    statusBelow,
+  });
 
   const maxPath = fitsOnOneLine ? availableWidth - rightLen - 2 : availableWidth;
   const truncPath =

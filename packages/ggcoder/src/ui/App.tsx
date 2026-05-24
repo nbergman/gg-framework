@@ -23,6 +23,10 @@ import {
   type ImageContent,
 } from "@kenkaiiii/gg-ai";
 import { extractImagePaths, type ImageAttachment } from "../utils/image.js";
+import {
+  buildGoalReferenceContext,
+  formatGoalReferencesForPrompt,
+} from "../core/goal-references.js";
 import type { AgentTool } from "@kenkaiiii/gg-agent";
 import { useAgentLoop, type UserContent } from "./hooks/useAgentLoop.js";
 import { UserMessage } from "./components/UserMessage.js";
@@ -38,7 +42,7 @@ import { createWebSearchTool } from "../tools/web-search.js";
 import { StreamingArea } from "./components/StreamingArea.js";
 import { ActivityIndicator } from "./components/ActivityIndicator.js";
 import { InputArea } from "./components/InputArea.js";
-import { Footer } from "./components/Footer.js";
+import { Footer, doesFooterFitOnOneLine } from "./components/Footer.js";
 import {
   GoalStatusBar,
   reconcileGoalStatusEntriesWithRuns,
@@ -64,6 +68,7 @@ import { ThemeSelector } from "./components/ThemeSelector.js";
 import {
   BackgroundTasksBar,
   getFooterStatusLayoutDecision,
+  type FooterStatusLayoutDecision,
 } from "./components/BackgroundTasksBar.js";
 import type { SlashCommandInfo } from "./components/SlashCommandMenu.js";
 import type { ProcessManager } from "../core/process-manager.js";
@@ -145,6 +150,7 @@ import {
   reconcileActiveGoalRuns,
   updateGoalTask,
   upsertGoalRun,
+  type GoalReference,
   type GoalRun,
 } from "../core/goal-store.js";
 import {
@@ -168,7 +174,7 @@ import {
   parseGoalSyntheticEvent,
 } from "./goal-events.js";
 import type { GoalMode } from "../core/runtime-mode.js";
-import { type TerminalHistoryContext, type TerminalHistoryPrinter } from "./terminal-history.js";
+import type { TerminalHistoryContext, TerminalHistoryPrinter } from "./terminal-history.js";
 
 /** Where ggcoder bugs should be reported. Surfaced in the guidance line. */
 const GGCODER_BUG_REPORT_URL = "github.com/kenkaiiii/gg-framework/issues";
@@ -319,6 +325,12 @@ export async function runGoalPromptSetupSequence({
   onStage?.("GOAL SETUP AGENT STARTED");
   await runAgent(setupPrompt);
   onStage?.("GOAL SETUP COMPLETE -> OPENING GOAL PANE");
+}
+
+function buildGoalTaskPromptWithReferences(run: GoalRun, taskPrompt: string): string {
+  if (taskPrompt.includes("## Goal References (MANDATORY)")) return taskPrompt;
+  const references = formatGoalReferencesForPrompt(run.references ?? []);
+  return references ? `${references}\n\n${taskPrompt}` : taskPrompt;
 }
 
 export function buildUserContentWithAttachments(
@@ -577,7 +589,7 @@ interface StepDoneItem {
   id: string;
 }
 
-/** Tools that get aggregated into a single compact group when concurrent. */
+/** Tools that get aggregated into a single compact group when possible. */
 const AGGREGATABLE_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const RUNNING_INDICATOR_ANIMATION_MS = 1_200;
 
@@ -981,6 +993,74 @@ export function getStaticHistoryKey({ resizeKey }: { resizeKey: number }): strin
   return `${resizeKey}`;
 }
 
+const MIN_LIVE_AREA_ROWS = 3;
+const INPUT_AREA_ROWS = 3;
+const MESSAGE_BODY_ROWS = 1;
+const STATUS_SLOT_ROWS = 2;
+const FOOTER_ONE_LINE_ROWS = 1;
+const FOOTER_TWO_LINE_ROWS = 2;
+const GOAL_STATUS_ROWS = 1;
+const COLLAPSED_FOOTER_STATUS_ROWS = 1;
+const MAX_EXPANDED_BACKGROUND_TASK_ROWS = 7;
+
+export interface ChatControlsLayoutOptions {
+  rows: number;
+  columns: number;
+  agentRunning: boolean;
+  activityVisible: boolean;
+  doneStatusVisible: boolean;
+  stallStatusVisible: boolean;
+  exitPending: boolean;
+  footerStatusLayout: FooterStatusLayoutDecision;
+  taskBarExpanded: boolean;
+  goalStatusEntryCount: number;
+  footerFitsOnOneLine: boolean;
+}
+
+export interface ChatControlsLayoutDecision {
+  controlsRows: number;
+  liveAreaRows: number;
+}
+
+export function getChatControlsLayoutDecision({
+  rows,
+  agentRunning,
+  activityVisible,
+  doneStatusVisible,
+  stallStatusVisible,
+  exitPending,
+  footerStatusLayout,
+  taskBarExpanded,
+  goalStatusEntryCount,
+  footerFitsOnOneLine,
+}: ChatControlsLayoutOptions): ChatControlsLayoutDecision {
+  const statusRows =
+    activityVisible || stallStatusVisible || doneStatusVisible || agentRunning
+      ? STATUS_SLOT_ROWS
+      : 0;
+  const footerRows =
+    exitPending || footerFitsOnOneLine ? FOOTER_ONE_LINE_ROWS : FOOTER_TWO_LINE_ROWS;
+  const goalRows = !exitPending && goalStatusEntryCount > 0 ? GOAL_STATUS_ROWS : 0;
+  const footerStatusRows = footerStatusLayout.stack
+    ? Number(footerStatusLayout.hasBackgroundTasks) + Number(footerStatusLayout.hasUpdateNotice)
+    : footerStatusLayout.hasBackgroundTasks || footerStatusLayout.hasUpdateNotice
+      ? COLLAPSED_FOOTER_STATUS_ROWS
+      : 0;
+  const expandedTaskRows =
+    taskBarExpanded && footerStatusLayout.hasBackgroundTasks
+      ? MAX_EXPANDED_BACKGROUND_TASK_ROWS - COLLAPSED_FOOTER_STATUS_ROWS
+      : 0;
+  const controlsRows =
+    statusRows + INPUT_AREA_ROWS + footerRows + goalRows + footerStatusRows + expandedTaskRows;
+  const maxControlsRows = Math.max(1, rows - MIN_LIVE_AREA_ROWS);
+  const boundedControlsRows = Math.min(controlsRows, maxControlsRows);
+
+  return {
+    controlsRows: boundedControlsRows,
+    liveAreaRows: Math.max(MIN_LIVE_AREA_ROWS, rows - boundedControlsRows),
+  };
+}
+
 // flushOnTurnText, flushOnTurnEnd are imported from ./live-item-flush.ts
 
 /** Check whether an item is still active (running spinner, pending result). */
@@ -1081,10 +1161,6 @@ function pickDurationVerb(toolsUsed: string[]): string {
   return phrases[Math.floor(Math.random() * phrases.length)];
 }
 
-// ── Animated thinking border ────────────────────────────────
-
-const THINKING_BORDER_COLORS = ["#60a5fa", "#818cf8", "#a78bfa", "#818cf8", "#60a5fa"];
-
 // ── App Props ──────────────────────────────────────────────
 
 export interface AppProps {
@@ -1119,6 +1195,7 @@ export interface AppProps {
   skills?: Skill[];
   initialOverlay?: "pixel" | "goal";
   rebuildToolsForCwd?: (cwd: string) => AgentTool[];
+  goalReferencesRef?: { current: readonly GoalReference[] | undefined };
   repoMapChangedFilesRef?: { current: Set<string> };
   repoMapReadFilesRef?: { current: Set<string> };
   terminalHistoryPrinter?: TerminalHistoryPrinter;
@@ -1197,7 +1274,7 @@ export function App(props: AppProps) {
   const theme = useTheme();
   const switchTheme = useSetTheme();
   const { write: writeStdout } = useStdout();
-  const { columns } = useTerminalSize();
+  const { columns, rows } = useTerminalSize();
 
   // Hoisted before terminal title hook so it can reference them
   const [lastUserMessage, setLastUserMessage] = useState("");
@@ -1417,6 +1494,17 @@ export function App(props: AppProps) {
     [sessionStore],
   );
 
+  const finalizeSubmittedUserItem = useCallback(
+    (item: UserItem) => {
+      setLiveItems((prev) => {
+        if (prev.length > 0) queueFlush(prev);
+        queueFlush([item]);
+        return [];
+      });
+    },
+    [queueFlush],
+  );
+
   // Mirror runtime state choices (model/provider/thinking) into renderApp's
   // closure so unmount/remount preserves them.
   const onRuntimeStateChange = props.onRuntimeStateChange;
@@ -1442,7 +1530,10 @@ export function App(props: AppProps) {
     pendingHistoryFlushRef.current = [];
     printHistoryItems(flushed);
     setHistory((prev) => {
-      const next = compactHistory([...prev, ...flushed]);
+      const existingIds = new Set(prev.map((item) => item.id));
+      const nextItems = flushed.filter((item) => !existingIds.has(item.id));
+      if (nextItems.length === 0) return prev;
+      const next = compactHistory([...prev, ...nextItems]);
       if (sessionStore) sessionStore.history = next;
       return next;
     });
@@ -1568,6 +1659,13 @@ export function App(props: AppProps) {
       props.goalModeRef.current = goalMode;
     }
   }, [goalMode, props.goalModeRef]);
+
+  const setActiveGoalReferences = useCallback(
+    (references: readonly GoalReference[] | undefined): void => {
+      if (props.goalReferencesRef) props.goalReferencesRef.current = references;
+    },
+    [props.goalReferencesRef],
+  );
 
   const rebuildSystemPrompt = useCallback(
     async (options?: {
@@ -2139,97 +2237,98 @@ export function App(props: AppProps) {
         activeBaseUrl,
         resolveCredentials,
       ]),
-      onTurnText: useCallback((text: string, thinking: string, thinkingMs: number) => {
-        if (goalModeStateRef.current === "planner") {
-          return;
-        }
+      onTurnText: useCallback(
+        (text: string, thinking: string, thinkingMs: number) => {
+          if (goalModeStateRef.current === "planner") {
+            return;
+          }
 
-        // Track [DONE:n] markers for plan step progress
-        if (planStepsRef.current.length > 0) {
-          const completed = findCompletedMarkers(text);
-          if (completed.size > 0) {
-            const updated = markStepsCompleted(planStepsRef.current, completed);
-            if (updated !== planStepsRef.current) {
-              planStepsRef.current = updated;
-              setPlanSteps(updated);
+          // Track [DONE:n] markers for plan step progress
+          if (planStepsRef.current.length > 0) {
+            const completed = findCompletedMarkers(text);
+            if (completed.size > 0) {
+              const updated = markStepsCompleted(planStepsRef.current, completed);
+              if (updated !== planStepsRef.current) {
+                planStepsRef.current = updated;
+                setPlanSteps(updated);
+              }
+              // Real progress happened — reset the stuck-guard so the next
+              // step gets its own fresh nudge budget.
+              followUpNudgesRef.current = { step: 0, count: 0 };
             }
-            // Real progress happened — reset the stuck-guard so the next
-            // step gets its own fresh nudge budget.
-            followUpNudgesRef.current = { step: 0, count: 0 };
           }
-        }
 
-        // Flush completed rows from the previous turn to finalized terminal
-        // history. Ink keeps only the active turn, preventing live-area growth
-        // and avoiding Static/log-update replay during resize/remount churn.
-        setLiveItems((prev) => {
-          const flushed = flushOnTurnText(prev);
-          if (flushed.length > 0) {
-            queueFlush(flushed);
-          }
-          // Split text on [DONE:N] markers so each marker renders inline as
-          // a styled "✓ Step N: <description>" item at the position the
-          // agent emitted it, instead of vanishing into stripped whitespace.
-          // Falls back to a single assistant item containing the
-          // marker-stripped text when there are no markers (keeps the
-          // common case zero-cost).
-          const segments = segmentDisplayText(text, planStepsRef.current);
-          const items: CompletedItem[] = [];
-          let thinkingAttached = false;
-          for (const seg of segments) {
-            if (seg.kind === "text") {
+          // Flush completed rows from the previous turn to finalized terminal
+          // history. Ink keeps only the active turn, preventing live-area growth
+          // and avoiding Static/log-update replay during resize/remount churn.
+          setLiveItems((prev) => {
+            const flushed = flushOnTurnText(prev);
+            if (flushed.length > 0) {
+              queueFlush(flushed);
+            }
+            // Split text on [DONE:N] markers so each marker renders inline as
+            // a styled "✓ Step N: <description>" item at the position the
+            // agent emitted it, instead of vanishing into stripped whitespace.
+            const segments = segmentDisplayText(text, planStepsRef.current);
+            const items: CompletedItem[] = [];
+            let thinkingAttached = false;
+            for (const seg of segments) {
+              if (seg.kind === "text") {
+                items.push({
+                  kind: "assistant",
+                  text: stripDoneMarkers(seg.text),
+                  // Attach thinking only to the first text segment so we
+                  // don't render duplicate ThinkingBlocks when a turn
+                  // contains multiple text chunks split by markers.
+                  thinking: thinkingAttached ? undefined : thinking,
+                  thinkingMs: thinkingAttached ? undefined : thinkingMs,
+                  id: getId(),
+                });
+                thinkingAttached = true;
+              } else {
+                items.push({
+                  kind: "step_done",
+                  stepNum: seg.stepNum,
+                  description: seg.description,
+                  id: getId(),
+                });
+              }
+            }
+            // No segments at all (text was empty/whitespace, no markers).
+            // Still persist an assistant item so a thinking block renders in
+            // terminal history if there was thinking content for this turn.
+            if (items.length === 0) {
               items.push({
                 kind: "assistant",
-                text: stripDoneMarkers(seg.text),
-                // Attach thinking only to the first text segment so we
-                // don't render duplicate ThinkingBlocks when a turn
-                // contains multiple text chunks split by markers.
-                thinking: thinkingAttached ? undefined : thinking,
-                thinkingMs: thinkingAttached ? undefined : thinkingMs,
-                id: getId(),
-              });
-              thinkingAttached = true;
-            } else {
-              items.push({
-                kind: "step_done",
-                stepNum: seg.stepNum,
-                description: seg.description,
+                text: "",
+                thinking,
+                thinkingMs,
                 id: getId(),
               });
             }
-          }
-          // No segments at all (text was empty/whitespace, no markers).
-          // Still emit an assistant item so a thinking block renders if
-          // there was thinking content for this turn.
-          if (items.length === 0) {
-            items.push({
-              kind: "assistant",
-              text: "",
-              thinking,
-              thinkingMs,
-              id: getId(),
-            });
-          }
-          return items;
-        });
-      }, []),
+            if (prev.length > 0) queueFlush(prev);
+            queueFlush(items);
+            return [];
+          });
+        },
+        [queueFlush],
+      ),
       onToolStart: useCallback(
         (toolCallId: string, name: string, args: Record<string, unknown>) => {
           log("INFO", "tool", `Tool call started: ${name}`, { id: toolCallId });
           const startedAt = Date.now();
           const animateUntil = startedAt + RUNNING_INDICATOR_ANIMATION_MS;
 
-          // Flush completed items (assistant text, finished tools) before adding
-          // tool UI so Ink only owns the active rows.
-          setLiveItems((prev) => {
+          const appendToolStart = (prev: CompletedItem[]): CompletedItem[] => {
             const { flushed, remaining } = partitionCompleted(prev);
             if (flushed.length > 0) {
               queueFlush(flushed);
             }
             return remaining;
-          });
+          };
 
           if (name === "subagent") {
+            setLiveItems(appendToolStart);
             // Create or update the sub-agent group item
             const newAgent: SubAgentInfo = {
               toolCallId,
@@ -2253,28 +2352,33 @@ export function App(props: AppProps) {
               return [...prev, { kind: "subagent_group", agents: [newAgent], id: getId() }];
             });
           } else if (AGGREGATABLE_TOOLS.has(name)) {
-            // Group concurrent read-only tools into a single compact item
             setLiveItems((prev) => {
-              // Find an active tool group (has at least one running tool)
-              const groupIdx = prev.findIndex(
+              const reusableGroupIdx = prev.findIndex(
                 (item) =>
                   item.kind === "tool_group" &&
-                  (item as ToolGroupItem).tools.some((t) => t.status === "running"),
+                  (item as ToolGroupItem).tools.every(
+                    (tool) => tool.name === name && !tool.isError,
+                  ),
               );
-              if (groupIdx !== -1) {
-                const group = prev[groupIdx] as ToolGroupItem;
-                const next = [...prev];
-                next[groupIdx] = {
-                  ...group,
-                  tools: [
-                    ...group.tools,
-                    { toolCallId, name, args, status: "running", animateUntil },
-                  ],
-                };
-                return next;
+              const prior = reusableGroupIdx === -1 ? [] : prev.slice(0, reusableGroupIdx);
+              if (reusableGroupIdx !== -1 && prior.every((item) => !isActiveItem(item))) {
+                if (prior.length > 0) queueFlush(prior);
+                const candidates = prev.slice(reusableGroupIdx);
+                const group = candidates[0] as ToolGroupItem;
+                return [
+                  {
+                    ...group,
+                    tools: [
+                      ...group.tools,
+                      { toolCallId, name, args, status: "running", animateUntil },
+                    ],
+                  },
+                  ...candidates.slice(1),
+                ];
               }
+              const remaining = appendToolStart(prev);
               return [
-                ...prev,
+                ...remaining,
                 {
                   kind: "tool_group",
                   tools: [{ toolCallId, name, args, status: "running", animateUntil }],
@@ -2284,12 +2388,12 @@ export function App(props: AppProps) {
             });
           } else {
             setLiveItems((prev) => [
-              ...prev,
+              ...appendToolStart(prev),
               { kind: "tool_start", toolCallId, name, args, id: getId(), startedAt, animateUntil },
             ]);
           }
         },
-        [],
+        [queueFlush],
       ),
       onToolUpdate: useCallback((toolCallId: string, update: unknown) => {
         const u = update as Record<string, unknown>;
@@ -2457,73 +2561,79 @@ export function App(props: AppProps) {
         },
         [],
       ),
-      onServerToolCall: useCallback((id: string, name: string, input: unknown) => {
-        log("INFO", "server_tool", `Server tool call: ${name}`, { id });
-        const startedAt = Date.now();
-        const animateUntil = startedAt + RUNNING_INDICATOR_ANIMATION_MS;
-        // Flush completed items (including assistant text) before adding server
-        // tool UI — same rationale as onToolStart.
-        setLiveItems((prev) => {
-          const { flushed, remaining } = partitionCompleted(prev);
-          if (flushed.length > 0) {
-            queueFlush(flushed);
-          }
-          return [
-            ...remaining,
-            {
-              kind: "server_tool_start",
-              serverToolCallId: id,
-              name,
-              input,
-              startedAt,
-              animateUntil,
-              id: getId(),
-            },
-          ];
-        });
-      }, []),
-      onServerToolResult: useCallback((toolUseId: string, resultType: string, data: unknown) => {
-        log("INFO", "server_tool", `Server tool result`, { toolUseId, resultType });
-        setLiveItems((prev) => {
-          let updated: CompletedItem[];
-          const startIdx = prev.findIndex(
-            (item) => item.kind === "server_tool_start" && item.serverToolCallId === toolUseId,
-          );
-          if (startIdx !== -1) {
-            const startItem = prev[startIdx] as ServerToolStartItem;
-            const doneItem: ServerToolDoneItem = {
-              kind: "server_tool_done",
-              name: startItem.name,
-              input: startItem.input,
-              resultType,
-              data,
-              durationMs: Date.now() - startItem.startedAt,
-              id: startItem.id,
-            };
-            updated = [...prev];
-            updated[startIdx] = doneItem;
-          } else {
-            updated = [
-              ...prev,
+      onServerToolCall: useCallback(
+        (id: string, name: string, input: unknown) => {
+          log("INFO", "server_tool", `Server tool call: ${name}`, { id });
+          const startedAt = Date.now();
+          const animateUntil = startedAt + RUNNING_INDICATOR_ANIMATION_MS;
+          // Flush completed items (including assistant text) before adding server
+          // tool UI — same rationale as onToolStart.
+          setLiveItems((prev) => {
+            const { flushed, remaining } = partitionCompleted(prev);
+            if (flushed.length > 0) {
+              queueFlush(flushed);
+            }
+            return [
+              ...remaining,
               {
-                kind: "server_tool_done",
-                name: "unknown",
-                input: {},
-                resultType,
-                data,
-                durationMs: 0,
+                kind: "server_tool_start",
+                serverToolCallId: id,
+                name,
+                input,
+                startedAt,
+                animateUntil,
                 id: getId(),
               },
             ];
-          }
-          // Flush completed items to finalized history
-          const { flushed, remaining } = partitionCompleted(updated);
-          if (flushed.length > 0) {
-            queueFlush(flushed);
-          }
-          return remaining;
-        });
-      }, []),
+          });
+        },
+        [queueFlush],
+      ),
+      onServerToolResult: useCallback(
+        (toolUseId: string, resultType: string, data: unknown) => {
+          log("INFO", "server_tool", `Server tool result`, { toolUseId, resultType });
+          setLiveItems((prev) => {
+            let updated: CompletedItem[];
+            const startIdx = prev.findIndex(
+              (item) => item.kind === "server_tool_start" && item.serverToolCallId === toolUseId,
+            );
+            if (startIdx !== -1) {
+              const startItem = prev[startIdx] as ServerToolStartItem;
+              const doneItem: ServerToolDoneItem = {
+                kind: "server_tool_done",
+                name: startItem.name,
+                input: startItem.input,
+                resultType,
+                data,
+                durationMs: Date.now() - startItem.startedAt,
+                id: startItem.id,
+              };
+              updated = [...prev];
+              updated[startIdx] = doneItem;
+            } else {
+              updated = [
+                ...prev,
+                {
+                  kind: "server_tool_done",
+                  name: "unknown",
+                  input: {},
+                  resultType,
+                  data,
+                  durationMs: 0,
+                  id: getId(),
+                },
+              ];
+            }
+            // Flush completed items to finalized history
+            const { flushed, remaining } = partitionCompleted(updated);
+            if (flushed.length > 0) {
+              queueFlush(flushed);
+            }
+            return remaining;
+          });
+        },
+        [queueFlush],
+      ),
       onTurnEnd: useCallback(
         (
           turn: number,
@@ -2559,7 +2669,7 @@ export function App(props: AppProps) {
             return remaining;
           });
         },
-        [],
+        [queueFlush],
       ),
       onDone: useCallback(
         (durationMs: number, toolsUsed: string[]) => {
@@ -2648,6 +2758,7 @@ export function App(props: AppProps) {
         currentPixelFixRef.current = null;
         queuedGoalSyntheticEventsRef.current = 0;
         goalSetupPanePendingRef.current = false;
+        setActiveGoalReferences(undefined);
         if (goalModeStateRef.current !== "off") void setGoalModeAndPrompt("off");
         setDoneStatus(null);
         setLiveItems((prev) => {
@@ -2692,7 +2803,7 @@ export function App(props: AppProps) {
           });
           return [...next, { kind: "stopped", text: "Request was stopped.", id: getId() }];
         });
-      }, [setGoalModeAndPrompt]),
+      }, [setActiveGoalReferences, setGoalModeAndPrompt]),
       onQueuedStart: useCallback(
         (content: UserContent) => {
           // When a queued message starts processing, show it as a UserItem
@@ -2734,10 +2845,6 @@ export function App(props: AppProps) {
             typeof content === "string"
               ? undefined
               : content.filter((c) => c.type === "image").length || undefined;
-          setLiveItems((prev) => {
-            if (prev.length > 0) queueFlush(prev);
-            return [];
-          });
           const userItem: UserItem = {
             kind: "user",
             text: displayText,
@@ -2746,9 +2853,9 @@ export function App(props: AppProps) {
           };
           setLastUserMessage(displayText);
           setDoneStatus(null);
-          setLiveItems([userItem]);
+          finalizeSubmittedUserItem(userItem);
         },
-        [appendGoalProgress, setGoalModeAndPrompt],
+        [appendGoalProgress, finalizeSubmittedUserItem, setGoalModeAndPrompt],
       ),
       // Inject a "continue with the next step" follow-up when the agent
       // would otherwise stop mid-plan. The prompt-only instruction wasn't
@@ -3064,17 +3171,24 @@ export function App(props: AppProps) {
           `Prompt command: /${cmdName}${cmdArgs ? ` (args: ${cmdArgs})` : ""}`,
         );
 
-        // Move live items into finalized history before starting.
-        setLiveItems((prev) => {
-          if (prev.length > 0) queueFlush(prev);
-          return [];
-        });
-
         const hasImages = inputImages.length > 0;
+        const isGoalSetupCommand = isGoalPromptCommandName(cmdName);
+        let promptForAgent = fullPrompt;
+        if (isGoalSetupCommand) {
+          const referenceContext = await buildGoalReferenceContext({
+            cwd: props.cwd,
+            originalGoalPrompt: fullPrompt,
+            attachments: inputImages,
+          });
+          setActiveGoalReferences(referenceContext.references);
+          promptForAgent = referenceContext.promptSection
+            ? `${fullPrompt}\n\n${referenceContext.promptSection}`
+            : fullPrompt;
+        }
         const modelInfo = getModel(currentModel);
         const modelSupportsImages = modelInfo?.supportsImages ?? true;
         const userContent = buildUserContentWithAttachments(
-          fullPrompt,
+          promptForAgent,
           inputImages,
           modelSupportsImages,
         );
@@ -3088,9 +3202,7 @@ export function App(props: AppProps) {
         };
         setLastUserMessage(trimmed);
         setDoneStatus(null);
-        setLiveItems([userItem]);
-
-        const isGoalSetupCommand = isGoalPromptCommandName(cmdName);
+        finalizeSubmittedUserItem(userItem);
 
         // Send the full prompt to the agent, with user args appended if provided
         try {
@@ -3098,7 +3210,7 @@ export function App(props: AppProps) {
             goalSetupPanePendingRef.current = true;
             await runGoalPromptSetupSequence({
               userContent,
-              fullPrompt,
+              fullPrompt: promptForAgent,
               messagesRef,
               setGoalModeAndPrompt,
               runAgent: (content) => agentLoop.run(content),
@@ -3120,6 +3232,7 @@ export function App(props: AppProps) {
           ]);
         } finally {
           if (isGoalSetupCommand) {
+            setActiveGoalReferences(undefined);
             const paneTransition = getGoalSetupPaneTransitionAfterRun({
               isGoalSetupCommand,
               setupPanePending: goalSetupPanePendingRef.current,
@@ -3197,15 +3310,6 @@ export function App(props: AppProps) {
         return;
       }
 
-      // Move any remaining live items into finalized history before starting a
-      // new turn so Ink keeps only active output.
-      setLiveItems((prev) => {
-        if (prev.length > 0) {
-          queueFlush(prev);
-        }
-        return [];
-      });
-
       // Build display text — strip image paths, show badges instead
       let displayText = input;
       if (hasImages) {
@@ -3227,7 +3331,7 @@ export function App(props: AppProps) {
         planStepsRef.current = [];
         setPlanSteps([]);
       }
-      setLiveItems([userItem]);
+      finalizeSubmittedUserItem(userItem);
 
       // Run agent
       try {
@@ -3246,12 +3350,20 @@ export function App(props: AppProps) {
     },
     [
       agentLoop,
-      props.onSlashCommand,
+      appendGoalAgentTransition,
       compactConversation,
+      currentModel,
+      finalizeSubmittedUserItem,
+      props.cwd,
+      props.onSlashCommand,
+      props.resetUI,
+      props.sessionStore,
       rebuildSystemPrompt,
-      replaceSystemPrompt,
-      setGoalModeAndPrompt,
       refreshRepoMap,
+      reloadCustomCommands,
+      replaceSystemPrompt,
+      setActiveGoalReferences,
+      setGoalModeAndPrompt,
       stripRepoMapMessages,
     ],
   );
@@ -3418,7 +3530,14 @@ export function App(props: AppProps) {
     const promptByName = new Map(PROMPT_COMMANDS.map((c) => [c.name, c]));
     const fromPrompt = (name: string): SlashCommandInfo | null => {
       const c = promptByName.get(name);
-      return c ? { name: c.name, aliases: c.aliases, description: c.description } : null;
+      return c
+        ? {
+            name: c.name,
+            aliases: c.aliases,
+            description: c.description,
+            sectionTitle: "workflows",
+          }
+        : null;
     };
     const promptOrder = [
       // Project audits / one-shot analysis
@@ -3437,22 +3556,33 @@ export function App(props: AppProps) {
     const knownPromptNames = new Set(promptOrder);
     const remainingPromptCommands = PROMPT_COMMANDS.filter(
       (c) => !knownPromptNames.has(c.name),
-    ).map((c) => ({ name: c.name, aliases: c.aliases, description: c.description }));
+    ).map((c) => ({
+      name: c.name,
+      aliases: c.aliases,
+      description: c.description,
+      sectionTitle: "workflows",
+    }));
 
     return [
       // Session actions (most frequent)
-      { name: "model", aliases: ["m"], description: "Switch model" },
-      { name: "compact", aliases: ["c"], description: "Compact conversation" },
-      { name: "clear", aliases: [], description: "Clear session and terminal" },
-      { name: "theme", aliases: ["t"], description: "Switch theme" },
+      { name: "model", aliases: ["m"], description: "Switch model", sectionTitle: "built-in" },
+      { name: "compact", aliases: ["c"], description: "Compact context", sectionTitle: "built-in" },
+      { name: "clear", aliases: [], description: "Clear session", sectionTitle: "built-in" },
+      { name: "theme", aliases: ["t"], description: "Switch theme", sectionTitle: "built-in" },
       ...orderedPromptCommands,
       ...remainingPromptCommands,
       ...customCommands.map((cmd) => ({
         name: cmd.name,
         aliases: [] as string[],
         description: cmd.description,
+        sectionTitle: "custom",
       })),
-      { name: "quit", aliases: ["q", "exit"], description: "Exit the agent" },
+      {
+        name: "quit",
+        aliases: ["q", "exit"],
+        description: "Exit ggcoder",
+        sectionTitle: "built-in",
+      },
     ];
   }, [customCommands]);
 
@@ -3719,7 +3849,7 @@ export function App(props: AppProps) {
       case "info":
         return (
           <Box key={item.id} marginTop={1} flexShrink={1}>
-            <Text color={theme.textDim} wrap="wrap">
+            <Text color={theme.commandColor} wrap="wrap">
               {item.text}
             </Text>
           </Box>
@@ -3731,10 +3861,10 @@ export function App(props: AppProps) {
             marginTop={1}
             flexShrink={1}
             borderStyle="round"
-            borderColor={theme.success}
+            borderColor={theme.commandColor}
             paddingX={1}
           >
-            <Text color={theme.success} bold wrap="wrap">
+            <Text color={theme.commandColor} bold wrap="wrap">
               {"✨ "}
               {item.text}
             </Text>
@@ -3743,7 +3873,7 @@ export function App(props: AppProps) {
       case "plan_transition":
         return (
           <Box key={item.id} marginTop={1} flexShrink={1}>
-            <Text color={theme.planPrimary} bold wrap="wrap">
+            <Text color={theme.commandColor} bold wrap="wrap">
               {item.active ? "● " : "● "}
               {item.text}
             </Text>
@@ -3752,57 +3882,56 @@ export function App(props: AppProps) {
       case "goal_agent_transition":
         return (
           <Box key={item.id} marginTop={1} flexShrink={1}>
-            <Text color={theme.success} bold wrap="wrap">
+            <Text color={theme.commandColor} bold wrap="wrap">
               {"● "}
               {item.text}
             </Text>
           </Box>
         );
       case "thinking_transition": {
-        const glyphColor = item.active ? THINKING_BORDER_COLORS[0] : theme.textDim;
+        const glyphColor = item.active ? theme.commandColor : theme.textDim;
         return (
           <Box key={item.id} marginTop={1} flexShrink={1}>
             <Text color={glyphColor} bold>
               {"✻ "}
             </Text>
-            <Text color={item.active ? theme.accent : theme.textDim} bold>
+            <Text color={item.active ? theme.commandColor : theme.textDim} bold>
               {item.active ? "Thinking ON" : "Thinking OFF"}
             </Text>
           </Box>
         );
       }
       case "model_transition": {
-        const glyphColor = THINKING_BORDER_COLORS[0];
+        const glyphColor = theme.commandColor;
         return (
           <Box key={item.id} marginTop={1} flexShrink={1}>
             <Text color={glyphColor} bold>
               {"▸ "}
             </Text>
             <Text color={theme.textDim}>{"Switched to "}</Text>
-            <Text color={theme.primary} bold>
+            <Text color={theme.commandColor} bold>
               {item.modelName}
             </Text>
           </Box>
         );
       }
       case "theme_transition": {
-        const glyphColor = THINKING_BORDER_COLORS[0];
+        const glyphColor = theme.commandColor;
         return (
           <Box key={item.id} marginTop={1} flexShrink={1}>
             <Text color={glyphColor} bold>
               {"◐ "}
             </Text>
             <Text color={theme.textDim}>{"Theme switched to "}</Text>
-            <Text color={theme.primary} bold>
+            <Text color={theme.commandColor} bold>
               {item.themeName}
             </Text>
           </Box>
         );
       }
       case "plan_event": {
-        // Plan-domain status changes (approve / reject / dismiss). Uses
-        // theme.planPrimary to match the existing plan_transition family,
-        // distinct from the model/thinking gradient.
+        // Plan-domain status changes (approve / reject / dismiss). Use the
+        // command accent so transient TUI status rows share one purple voice.
         const label =
           item.event === "approved"
             ? "Plan approved"
@@ -3811,7 +3940,7 @@ export function App(props: AppProps) {
               : "Plan dismissed";
         return (
           <Box key={item.id} marginTop={1} flexShrink={1}>
-            <Text color={theme.planPrimary} bold>
+            <Text color={theme.commandColor} bold>
               {"○ "}
               {label}
             </Text>
@@ -3825,7 +3954,7 @@ export function App(props: AppProps) {
         // gradient. Glyph `⊘` reads as "stop" without being alarming.
         return (
           <Box key={item.id} marginTop={1} flexShrink={1}>
-            <Text color={theme.textDim} bold>
+            <Text color={theme.commandColor} bold>
               {"⊘ "}
               {item.text}
             </Text>
@@ -4328,7 +4457,7 @@ export function App(props: AppProps) {
           goalRunId: checkedRun.id,
           goalTaskId: decision.task.id,
           taskTitle: decision.task.title,
-          prompt: decision.task.prompt,
+          prompt: buildGoalTaskPromptWithReferences(checkedRun, decision.task.prompt),
         });
         const latestRun =
           (await loadGoalRuns(props.cwd)).find((item) => item.id === checkedRun.id) ??
@@ -4687,7 +4816,38 @@ export function App(props: AppProps) {
     backgroundTaskCount: bgTasks.length,
     updatePending,
   });
+  const activityVisible = agentLoop.isRunning && agentLoop.activityPhase !== "idle";
+  const stallStatusVisible = !activityVisible && !!agentLoop.stallError;
+  const doneStatusVisible =
+    !activityVisible && !stallStatusVisible && !!doneStatus && !agentLoop.isRunning;
+  const statusSlotVisible = activityVisible || stallStatusVisible || doneStatusVisible;
+  const footerFitsOnOneLine = doesFooterFitOnOneLine({
+    columns,
+    model: currentModel,
+    tokensIn: agentLoop.contextUsed,
+    contextWindowOptions,
+    cwd: displayedCwd,
+    gitBranch,
+    thinkingLevel: thinkingEnabled ? getMaxThinkingLevel(currentModel) : undefined,
+    goalMode,
+  });
+  const chatControlsLayout = getChatControlsLayoutDecision({
+    rows,
+    columns,
+    agentRunning: agentLoop.isRunning,
+    activityVisible,
+    doneStatusVisible,
+    stallStatusVisible,
+    exitPending,
+    footerStatusLayout,
+    taskBarExpanded,
+    goalStatusEntryCount: goalStatusEntries.length,
+    footerFitsOnOneLine,
+  });
   const isPixelView = overlay === "pixel";
+  const visibleStreamingText =
+    goalModeStateRef.current === "planner" ? "" : agentLoop.streamingText;
+
   return (
     <Box flexDirection="column" width={columns}>
       {isGoalView ? (
@@ -4946,164 +5106,180 @@ export function App(props: AppProps) {
       ) : (
         <>
           {/* Content area */}
-          <Box flexDirection="column" paddingRight={1}>
+          <Box
+            flexDirection="column"
+            paddingRight={1}
+            minHeight={
+              agentLoop.isRunning && liveItems.length === 0 && !visibleStreamingText.trim()
+                ? MESSAGE_BODY_ROWS
+                : undefined
+            }
+            maxHeight={chatControlsLayout.liveAreaRows}
+            flexGrow={0}
+            flexShrink={1}
+            overflowY={agentLoop.isRunning ? "hidden" : undefined}
+          >
             {liveItems.map((item) => renderItem(item))}
             <StreamingArea
               isRunning={agentLoop.isRunning}
-              streamingText={goalModeStateRef.current === "planner" ? "" : agentLoop.streamingText}
+              streamingText={visibleStreamingText}
               streamingThinking={agentLoop.streamingThinking}
               thinkingMs={agentLoop.thinkingMs}
             />
           </Box>
 
-          {/* Pinned status line — keep the border geometry stable across
-              phase transitions, but avoid color animation while the agent is
-              working. Repainting the live area on every decorative tick makes
-              terminal scrollback snap back to the bottom. */}
-          {agentLoop.isRunning && agentLoop.activityPhase !== "idle" ? (
-            <Box
-              marginTop={1}
-              borderStyle="round"
-              borderColor={
-                agentLoop.activityPhase === "thinking" ? THINKING_BORDER_COLORS[0] : "transparent"
-              }
-              paddingLeft={1}
-              paddingRight={1}
-              width={columns}
-            >
-              <ActivityIndicator
-                phase={agentLoop.activityPhase}
-                elapsedMs={agentLoop.elapsedMs}
-                runStartRef={agentLoop.runStartRef}
-                thinkingMs={agentLoop.thinkingMs}
-                isThinking={agentLoop.isThinking}
-                thinkingEnabled={thinkingEnabled}
-                tokenEstimate={agentLoop.streamedTokenEstimate}
-                charCountRef={agentLoop.charCountRef}
-                realTokensAccumRef={agentLoop.realTokensAccumRef}
-                userMessage={lastUserMessage}
-                activeToolNames={agentLoop.activeToolCalls.map((tc) => tc.name)}
-                retryInfo={agentLoop.retryInfo}
-                planDone={planSteps.filter((s) => s.completed).length}
-                planTotal={planSteps.length}
-                staticDisplay
-              />
-            </Box>
-          ) : agentLoop.stallError ? (
-            <Box marginTop={1} flexDirection="column">
-              <Text color={theme.warning}>
-                {"⚠ API provider stream interrupted — retries exhausted."}
-              </Text>
-              <Text color={theme.textDim}>
-                {"  Your conversation is preserved. Send a message to continue."}
-              </Text>
-            </Box>
-          ) : (
-            doneStatus &&
-            !agentLoop.isRunning && (
+          <Box flexDirection="column">
+            {/* Queue indicator */}
+            {agentLoop.queuedCount > 0 && (
               <Box marginTop={1}>
-                <Text color={theme.success}>
-                  {"✻ "}
-                  {doneStatus.verb} {formatDuration(doneStatus.durationMs)}
+                <Text color={theme.warning} bold>
+                  {"• "}
+                </Text>
+                <Text color={theme.textDim}>
+                  {agentLoop.queuedCount} message{agentLoop.queuedCount > 1 ? "s" : ""} queued
                 </Text>
               </Box>
-            )
-          )}
+            )}
 
-          {/* Queue indicator */}
-          {agentLoop.queuedCount > 0 && (
-            <Box marginTop={1}>
-              <Text color={theme.warning} bold>
-                {"• "}
-              </Text>
-              <Text color={theme.textDim}>
-                {agentLoop.queuedCount} message{agentLoop.queuedCount > 1 ? "s" : ""} queued
-              </Text>
-            </Box>
-          )}
-
-          {/* Input + Footer */}
-          <InputArea
-            onSubmit={handleSubmit}
-            onAbort={handleAbort}
-            disabled={agentLoop.isRunning}
-            isActive={!taskBarFocused && !overlay}
-            onDownAtEnd={handleFocusTaskBar}
-            onShiftTab={handleToggleThinking}
-            onToggleGoal={() => {
-              openOverlay("goal");
-            }}
-            onToggleSkills={() => {
-              openOverlay("skills");
-            }}
-            onTogglePixel={() => {
-              openOverlay("pixel");
-            }}
-            cwd={props.cwd}
-            commands={allCommands}
-          />
-          {overlay === "model" ? (
-            <ModelSelector
-              onSelect={handleModelSelect}
-              onCancel={() => setOverlay(null)}
-              loggedInProviders={props.loggedInProviders ?? [currentProvider]}
-              currentModel={currentModel}
-              currentProvider={currentProvider}
-            />
-          ) : overlay === "theme" ? (
-            <ThemeSelector
-              onSelect={handleThemeSelect}
-              onCancel={() => setOverlay(null)}
-              currentTheme={theme.name}
-            />
-          ) : (
-            <>
-              <Footer
-                model={currentModel}
-                tokensIn={agentLoop.contextUsed}
-                contextWindowOptions={contextWindowOptions}
-                cwd={displayedCwd}
-                gitBranch={gitBranch}
-                thinkingLevel={thinkingEnabled ? getMaxThinkingLevel(currentModel) : undefined}
-                goalMode={goalMode}
-                exitPending={exitPending}
+            {/* Input + Footer */}
+            <Box flexDirection="column" width={columns}>
+              <Box
+                borderStyle="single"
+                borderTop
+                borderBottom={false}
+                borderLeft={false}
+                borderRight={false}
+                borderColor={theme.textDim}
+                width={columns}
+                height={0}
               />
-              {!exitPending && <GoalStatusBar entries={goalStatusEntries} />}
-            </>
-          )}
-          {/* Status row — background tasks and the update-ready indicator share
-              a single line. Order is intentional: active work first, ambient
-              hints last. */}
-          {(footerStatusLayout.hasBackgroundTasks || footerStatusLayout.hasUpdateNotice) && (
-            <Box flexDirection={footerStatusLayout.stack ? "column" : "row"} width={columns}>
-              {footerStatusLayout.hasBackgroundTasks && (
-                <BackgroundTasksBar
-                  tasks={bgTasks}
-                  focused={taskBarFocused}
-                  expanded={taskBarExpanded}
-                  selectedIndex={selectedTaskIndex}
-                  onExpand={handleTaskBarExpand}
-                  onCollapse={handleTaskBarCollapse}
-                  onKill={handleTaskKill}
-                  onExit={handleTaskBarExit}
-                  onNavigate={handleTaskNavigate}
-                  compact={footerStatusLayout.compactBackgroundTasks}
-                />
-              )}
-              {footerStatusLayout.hasUpdateNotice && (
-                <Box
-                  paddingLeft={
-                    footerStatusLayout.stack || !footerStatusLayout.hasBackgroundTasks ? 1 : 2
-                  }
-                  paddingRight={1}
-                >
-                  <Text color={theme.success} bold wrap="truncate">
-                    ✨ Update ready · restart to apply
+              <Box paddingLeft={1} paddingRight={1} width={columns}>
+                {statusSlotVisible ? (
+                  activityVisible ? (
+                    <ActivityIndicator
+                      phase={agentLoop.activityPhase}
+                      elapsedMs={agentLoop.elapsedMs}
+                      runStartRef={agentLoop.runStartRef}
+                      thinkingMs={agentLoop.thinkingMs}
+                      isThinking={agentLoop.isThinking}
+                      thinkingEnabled={thinkingEnabled}
+                      tokenEstimate={agentLoop.streamedTokenEstimate}
+                      charCountRef={agentLoop.charCountRef}
+                      realTokensAccumRef={agentLoop.realTokensAccumRef}
+                      userMessage={lastUserMessage}
+                      activeToolNames={agentLoop.activeToolCalls.map((tc) => tc.name)}
+                      retryInfo={agentLoop.retryInfo}
+                      planDone={planSteps.filter((s) => s.completed).length}
+                      planTotal={planSteps.length}
+                      staticDisplay
+                    />
+                  ) : stallStatusVisible ? (
+                    <Text color={theme.warning} wrap="truncate">
+                      {
+                        "⚠ API provider stream interrupted — retries exhausted. Your conversation is preserved."
+                      }
+                    </Text>
+                  ) : doneStatus ? (
+                    <Text color={theme.success}>
+                      {"✻ "}
+                      {doneStatus.verb} {formatDuration(doneStatus.durationMs)}
+                    </Text>
+                  ) : (
+                    <Text>
+                      <Text color={theme.commandColor}>{"⠿ "}</Text>
+                      <Text color={theme.textDim}>{"Ready to go.."}</Text>
+                    </Text>
+                  )
+                ) : (
+                  <Text>
+                    <Text color={theme.commandColor}>{"⠿ "}</Text>
+                    <Text color={theme.textDim}>{"Ready to go.."}</Text>
                   </Text>
-                </Box>
-              )}
+                )}
+              </Box>
             </Box>
-          )}
+            <InputArea
+              onSubmit={handleSubmit}
+              onAbort={handleAbort}
+              disabled={agentLoop.isRunning}
+              isActive={!taskBarFocused && !overlay}
+              onDownAtEnd={handleFocusTaskBar}
+              onShiftTab={handleToggleThinking}
+              onToggleGoal={() => {
+                openOverlay("goal");
+              }}
+              onToggleSkills={() => {
+                openOverlay("skills");
+              }}
+              onTogglePixel={() => {
+                openOverlay("pixel");
+              }}
+              cwd={props.cwd}
+              commands={allCommands}
+            />
+            {overlay === "model" ? (
+              <ModelSelector
+                onSelect={handleModelSelect}
+                onCancel={() => setOverlay(null)}
+                loggedInProviders={props.loggedInProviders ?? [currentProvider]}
+                currentModel={currentModel}
+                currentProvider={currentProvider}
+              />
+            ) : overlay === "theme" ? (
+              <ThemeSelector
+                onSelect={handleThemeSelect}
+                onCancel={() => setOverlay(null)}
+                currentTheme={theme.name}
+              />
+            ) : (
+              <>
+                <Footer
+                  model={currentModel}
+                  tokensIn={agentLoop.contextUsed}
+                  contextWindowOptions={contextWindowOptions}
+                  cwd={displayedCwd}
+                  gitBranch={gitBranch}
+                  thinkingLevel={thinkingEnabled ? getMaxThinkingLevel(currentModel) : undefined}
+                  goalMode={goalMode}
+                  exitPending={exitPending}
+                />
+                {!exitPending && <GoalStatusBar entries={goalStatusEntries} />}
+              </>
+            )}
+            {/* Status row — background tasks and the update-ready indicator share
+                a single line. Order is intentional: active work first, ambient
+                hints last. */}
+            {(footerStatusLayout.hasBackgroundTasks || footerStatusLayout.hasUpdateNotice) && (
+              <Box flexDirection={footerStatusLayout.stack ? "column" : "row"} width={columns}>
+                {footerStatusLayout.hasBackgroundTasks && (
+                  <BackgroundTasksBar
+                    tasks={bgTasks}
+                    focused={taskBarFocused}
+                    expanded={taskBarExpanded}
+                    selectedIndex={selectedTaskIndex}
+                    onExpand={handleTaskBarExpand}
+                    onCollapse={handleTaskBarCollapse}
+                    onKill={handleTaskKill}
+                    onExit={handleTaskBarExit}
+                    onNavigate={handleTaskNavigate}
+                    compact={footerStatusLayout.compactBackgroundTasks}
+                  />
+                )}
+                {footerStatusLayout.hasUpdateNotice && (
+                  <Box
+                    paddingLeft={
+                      footerStatusLayout.stack || !footerStatusLayout.hasBackgroundTasks ? 1 : 2
+                    }
+                    paddingRight={1}
+                  >
+                    <Text color={theme.success} bold wrap="truncate">
+                      ✨ Update ready · restart to apply
+                    </Text>
+                  </Box>
+                )}
+              </Box>
+            )}
+          </Box>
         </>
       )}
     </Box>

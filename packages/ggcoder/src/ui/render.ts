@@ -11,7 +11,7 @@ import { createTerminalHistoryPrinter } from "./terminal-history.js";
 import type { GoalStatusEntry } from "./components/GoalStatusBar.js";
 import { shutdownGoalWorkers } from "../core/goal-worker.js";
 import type { PlanStep } from "../utils/plan-steps.js";
-import type { GoalRun } from "../core/goal-store.js";
+import type { GoalReference, GoalRun } from "../core/goal-store.js";
 import type { GoalMode } from "../core/runtime-mode.js";
 import { ThemeContext, SetThemeContext, loadTheme, type ThemeName } from "./theme/theme.js";
 import { detectTheme } from "./theme/detect-theme.js";
@@ -53,6 +53,7 @@ export interface RenderAppConfig {
   skills?: Skill[];
   initialOverlay?: "pixel" | "goal";
   rebuildToolsForCwd?: (cwd: string) => AgentTool[];
+  goalReferencesRef?: { current: readonly GoalReference[] | undefined };
   repoMapChangedFilesRef?: { current: Set<string> };
   repoMapReadFilesRef?: { current: Set<string> };
 }
@@ -317,6 +318,7 @@ export async function renderApp(config: RenderAppConfig): Promise<void> {
             skills: config.skills,
             initialOverlay: config.initialOverlay,
             rebuildToolsForCwd: config.rebuildToolsForCwd,
+            goalReferencesRef: config.goalReferencesRef,
             repoMapChangedFilesRef: config.repoMapChangedFilesRef,
             repoMapReadFilesRef: config.repoMapReadFilesRef,
             terminalHistoryPrinter,
@@ -348,6 +350,7 @@ export async function renderApp(config: RenderAppConfig): Promise<void> {
       sessionStore.sessionTitle = undefined;
       sessionStore.sessionTitleGenerated = false;
       sessionStore.goalStatusEntries = [];
+      if (config.goalReferencesRef) config.goalReferencesRef.current = undefined;
     }
     if (options?.messages) sessionStore.messages = options.messages;
     if (options?.history) {

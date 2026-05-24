@@ -99,8 +99,11 @@ describe("prompt commands", () => {
     expect(init?.prompt).toContain("project-specific context only");
     expect(init?.prompt).toContain("Do NOT add generic agent behavior");
     expect(init?.prompt).toContain("Remove generic guidance");
+    expect(init?.prompt).toContain("Never add guidance that requires running checks");
+    expect(init?.prompt).toContain("mandatory after-every-edit requirements");
+    expect(init?.prompt).toContain("After editing ANY file");
     expect(init?.prompt).toContain(
-      "Do not duplicate language style packs or generic verification rules",
+      "Do not duplicate language style packs, generic verification rules",
     );
     expect(init?.prompt).toContain("Do NOT embed generated symbol maps");
     expect(init?.prompt).toContain("generated repo maps");
@@ -109,5 +112,6 @@ describe("prompt commands", () => {
     expect(init?.prompt).not.toContain("one file per component");
     expect(init?.prompt).not.toContain("single responsibility");
     expect(init?.prompt).not.toContain("zero-tolerance code quality checks");
+    expect(init?.prompt).not.toContain("run full quality suite after every edit");
   });
 });

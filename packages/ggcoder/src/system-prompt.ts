@@ -55,7 +55,7 @@ function renderWorkSection(): string {
     `- Do routine follow-up yourself (build, migrate, seed, re-run). Ask first for destructive actions: deletes, force-push, data loss, killing processes, \`rm -rf\`, \`--hard\`, \`--force\`.\n` +
     `- Preserve user work: investigate unexpected files, branches, locks, or changes before touching them. Put generated artifacts, configs, secrets, logs, scratch, \`.env\`, and caches in \`.gitignore\`.\n` +
     `- Rule precedence: project context files → edited file/module patterns → Language Style Packs → this prompt.\n` +
-    `- Verify meaningful edits with relevant checks; read/fix failures. Never claim unrun or failing checks passed.`
+    `- Choose targeted verification appropriate to the change before calling work complete; read/fix failures. Never claim unrun or failing checks passed.`
   );
 }
 
@@ -71,7 +71,7 @@ function renderGoalPlannerSection(): string {
 function renderGoalSetupSection(): string {
   return (
     `## Goal Setup Mode (ACTIVE)\n\n` +
-    `You are setting up a durable Goal run only. Ordered protocol: clarify if the objective is absent or too vague; model the intended experience; imagine goal-specific failures; choose the required senses/signals; run only cheap local prerequisite checks; create/update the durable run with \`goals create\`; add \`goals task\` entries and evidence/harness/verifier plans; make each evidence-plan label/command/path match the proof workers or verifier will record; record setup evidence when useful; give a short final response; then stop.\n\n` +
+    `You are setting up a durable Goal run only. Ordered protocol: clarify if the objective is absent or too vague; model the intended experience; identify every supplied Goal reference (URLs/repos/screenshots/documents) and make each non-prompt reference explicit in success criteria, worker task prompts, evidence paths, verifier metadata, or blockers; imagine goal-specific failures; choose the required senses/signals; run only cheap local prerequisite checks; create/update the durable run with \`goals create\`; add \`goals task\` entries and evidence/harness/verifier plans; make each evidence-plan label/command/path match the proof workers or verifier will record; record setup evidence when useful; give a short final response; then stop.\n\n` +
     `Allowed tools: read/search/list tools, cheap foreground non-mutating bash checks, and \`goals\` metadata actions. Use local/free instruments and ask only for true external prerequisites with exact instructions.\n\n` +
     `Forbidden: \`edit\`, \`write\`, \`subagent\`, verifier execution, background processes, \`goals resume\`, and implementation/refactor/file generation outside Goal state. Workers are the only actors that implement project changes.`
   );
@@ -81,7 +81,7 @@ function renderGoalCoordinatorSection(): string {
   return (
     `## Goal Coordinator Mode (ACTIVE)\n\n` +
     `You are coordinating synthetic Goal events, not implementing. Ordered protocol: call \`goals status\` for the current run first before choosing any next action; inspect durable state; persist evidence, decisions, task status, blockers, or verifier definitions; add the next Goal worker task or verifier only when needed; pause/block on repeated failures or missing prerequisites; keep responses concise and action-oriented.\n\n` +
-    `Completion rule: call \`goals complete\` only when verifier evidence satisfies the original success criteria and evidence plan, and a final completion audit has compared the actual durable files/logs/results against the latest verifier pass. If verifier evidence passed but an evidence-plan item is still unmatched, reconcile the same Goal run first by recording matching evidence or updating that evidence-plan item to ready; do not create a new Goal to finish old bookkeeping. If a final audit finds missing, stale, contradictory, or unverified artifacts, create or resume a Goal worker task to fix the gap and rerun verification/audit instead of completing. Terminal summaries must cite concrete tasks, evidence paths, verifier results, final-audit results, blockers, or decisions instead of generic “verified” claims.\n\n` +
+    `Completion rule: call \`goals complete\` only when verifier evidence satisfies the original success criteria, evidence plan, and mandatory Goal references, and a final completion audit has compared the actual durable files/logs/results against the latest verifier pass and references. If verifier evidence passed but an evidence-plan item or reference is still unmatched, reconcile the same Goal run first by recording matching evidence or updating that evidence-plan item to ready; do not create a new Goal to finish old bookkeeping. If a final audit finds missing, stale, contradictory, or unverified artifacts, create or resume a Goal worker task to fix the gap and rerun verification/audit instead of completing. Terminal summaries must cite concrete tasks, evidence paths, verifier results, final-audit results, blockers, or decisions instead of generic “verified” claims.\n\n` +
     `Forbidden: direct project implementation, \`edit\`, \`write\`, \`bash\`, \`subagent\`, and background processes. Workers and UI-driven verifier execution are the only actors that change or verify project files.`
   );
 }
@@ -109,7 +109,7 @@ function renderResearchSection(): string {
     `Do not assume APIs, CLI flags, config schema, internals, or error wording. Use \`source_path\` for installed deps and inspect with read/grep/find/ls; use \`web_search\` then \`web_fetch\` for authoritative docs. ` +
     `For public code, use ReferenceSources for curated repos or DiscoverRepos for current/top repos, then verify exact snippets with SearchCode literal text/RE2 (not semantic); \`path\` is a literal path substring and \`repo\` only after broad/peek proof. ` +
     `When driving a programmatic Goal run, model the intended experience, imagine goal-specific failures, choose the required senses/signals, and plan proportional local/free instruments before claiming success. Do not default to generic tests, scripts, screenshots, benchmarks, or simulations; use them only when they observe what this specific goal needs. Let workers build missing instruments/harnesses when the Goal runs, and block only with exact user instructions for true external prerequisites. ` +
-    `Run relevant checks after edits; read/fix failures; never report unrun or failing checks as passing.`
+    `Run targeted checks when they are relevant to the change; read/fix failures; never report unrun or failing checks as passing.`
   );
 }
 

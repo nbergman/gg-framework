@@ -24,11 +24,13 @@ import {
   type GoalEvidenceKind,
   type GoalEvidenceMechanism,
   type GoalPrerequisiteStatus,
+  type GoalReference,
   type GoalRun,
   type GoalRunStatus,
   type GoalTaskStatus,
   type GoalVerificationStatus,
 } from "../core/goal-store.js";
+import { referencesRequiringAcknowledgement } from "../core/goal-references.js";
 import { getActiveGoalMode, type GoalMode } from "../core/runtime-mode.js";
 
 const PrerequisiteInput = z.object({
@@ -257,6 +259,15 @@ function asVerificationStatus(value: string | undefined): GoalVerificationStatus
   return "unknown";
 }
 
+function formatRunReferences(run: GoalRun): string {
+  if (!run.references?.length) return "";
+  const lines = run.references.map(
+    (reference) =>
+      `- ${reference.id}: ${reference.kind}; ${reference.label}${reference.value ? `; value=${reference.value}` : ""}${reference.path ? `; path=${reference.path}` : ""}`,
+  );
+  return `\nReferences:\n${lines.join("\n")}`;
+}
+
 function formatRun(run: GoalRun): string {
   const prereqs = run.prerequisites.length
     ? `${run.prerequisites.filter((item) => item.status === "met").length}/${run.prerequisites.length} prereqs met`
@@ -269,6 +280,7 @@ function formatRun(run: GoalRun): string {
     : run.verifier?.command
       ? "verifier configured"
       : "no verifier";
+  const refs = run.references?.length ? `, ${run.references.length} reference(s)` : "";
   const audit = run.completionAudit
     ? `, final audit ${run.completionAudit.status}`
     : run.verifier?.lastResult?.status === "pass"
@@ -277,7 +289,7 @@ function formatRun(run: GoalRun): string {
   const blocker = goalHasBlockingPrerequisites(run)
     ? `\nUser prerequisites: ${formatGoalBlockingPrerequisites(run)}`
     : "";
-  return `[${run.status}] ${run.title} (id: ${run.id.slice(0, 8)}) — ${prereqs}, ${tasks}, ${verifier}${audit}${blocker}`;
+  return `[${run.status}] ${run.title} (id: ${run.id.slice(0, 8)}) — ${prereqs}, ${tasks}, ${verifier}${refs}${audit}${blocker}${formatRunReferences(run)}`;
 }
 
 function recoverableTaskStatus(status: GoalTaskStatus): boolean {
@@ -291,16 +303,69 @@ function statusAfterTaskPatch(run: GoalRun, status: GoalTaskStatus): GoalRunStat
   return goalHasBlockingPrerequisites(run) ? "blocked" : "ready";
 }
 
-function setupBlockersForRun(
-  run: Pick<GoalRun, "successCriteria" | "evidencePlan" | "verifier">,
-): string[] {
+const SETUP_BLOCKER_PREFIX = "Goal setup incomplete:";
+
+function referencesAcknowledged(
+  references: readonly GoalReference[] | undefined,
+  fields: readonly string[],
+): boolean {
+  const required = referencesRequiringAcknowledgement(references ?? []);
+  if (required.length === 0) return true;
+  const haystack = fields.join("\n").toLowerCase();
+  return required.every((reference) => {
+    const tokens = [reference.id, reference.label, reference.value, reference.path]
+      .filter((token): token is string => !!token?.trim())
+      .map((token) => token.toLowerCase());
+    return tokens.some((token) => haystack.includes(token));
+  });
+}
+
+function setupBlockersForRun(run: {
+  successCriteria: readonly string[];
+  evidencePlan: readonly GoalRun["evidencePlan"][number][];
+  verifier?: GoalRun["verifier"];
+  references?: readonly GoalReference[];
+  tasks: readonly GoalRun["tasks"][number][];
+}): string[] {
   const blockers: string[] = [];
   if (run.successCriteria.length === 0)
-    blockers.push("Goal setup incomplete: success criteria are required.");
+    blockers.push(`${SETUP_BLOCKER_PREFIX} success criteria are required.`);
   if (run.evidencePlan.length === 0)
-    blockers.push("Goal setup incomplete: evidence_plan is required.");
-  if (!run.verifier?.command) blockers.push("Goal setup incomplete: verifier_command is required.");
+    blockers.push(`${SETUP_BLOCKER_PREFIX} evidence_plan is required.`);
+  if (!run.verifier?.command)
+    blockers.push(`${SETUP_BLOCKER_PREFIX} verifier_command is required.`);
+  const referenceFields = [
+    ...run.successCriteria,
+    ...run.evidencePlan.map(
+      (item) =>
+        `${item.id} ${item.label} ${item.description} ${item.command ?? ""} ${item.path ?? ""} ${item.evidence ?? ""}`,
+    ),
+    ...run.tasks.map((task) => `${task.title} ${task.prompt}`),
+    run.verifier?.description ?? "",
+    run.verifier?.command ?? "",
+  ];
+  if (!referencesAcknowledged(run.references, referenceFields)) {
+    blockers.push(
+      `${SETUP_BLOCKER_PREFIX} every non-prompt Goal reference must be named in success criteria, task prompts, evidence_plan, or verifier metadata.`,
+    );
+  }
   return blockers;
+}
+
+function blockersAfterSetupCheck(run: GoalRun, setupBlockers: readonly string[]): string[] {
+  if (run.status !== "draft") return run.blockers;
+  return Array.from(
+    new Set([
+      ...run.blockers.filter((blocker) => !blocker.startsWith(SETUP_BLOCKER_PREFIX)),
+      ...setupBlockers,
+    ]),
+  );
+}
+
+function statusAfterSetupCheck(run: GoalRun, setupBlockers: readonly string[]): GoalRunStatus {
+  if (run.status !== "draft") return run.status;
+  if (setupBlockers.length > 0) return "draft";
+  return goalHasBlockingPrerequisites(run) ? "blocked" : "ready";
 }
 
 function validatePassAuditContract(
@@ -318,6 +383,9 @@ function validatePassAuditContract(
   if (!outputPath && !summary.match(/(?:output|artifact|log|path)=\S+/)) {
     return "pass audit must include output_path or an output/artifact/log/path reference in the summary.";
   }
+  if (!referencesAcknowledged(run.references, [summary, outputPath ?? ""])) {
+    return "pass audit summary or output_path must explicitly reference every non-prompt Goal reference id, label, URL, or path.";
+  }
   return undefined;
 }
 
@@ -329,6 +397,7 @@ async function resolveRun(cwd: string, id?: string): Promise<GoalRun | null> {
 export function createGoalsTool(
   cwd: string,
   goalModeRef?: { current: GoalMode },
+  getGoalReferences?: () => readonly GoalReference[] | undefined,
 ): AgentTool<typeof GoalsParams> {
   return {
     name: "goals",
@@ -385,9 +454,12 @@ export function createGoalsTool(
           const missingPrerequisites = formatGoalBlockingPrerequisiteList(nextPrerequisites);
           const hasBlockingPrerequisites =
             missingPrerequisites !== "Goal has no missing user prerequisites.";
+          const references = [...(getGoalReferences?.() ?? existing?.references ?? [])];
           const draftProbe = {
             successCriteria: args.success_criteria ?? existing?.successCriteria ?? [],
             evidencePlan: evidencePlan ?? existing?.evidencePlan ?? [],
+            references,
+            tasks: existing?.tasks ?? [],
             verifier,
           };
           const setupBlockers = setupBlockersForRun(draftProbe);
@@ -412,17 +484,20 @@ export function createGoalsTool(
             prerequisites: nextPrerequisites,
             harness: harness ?? existing?.harness ?? [],
             evidencePlan: draftProbe.evidencePlan,
+            references: draftProbe.references,
             ...(verifier ? { verifier } : {}),
             blockers,
           });
           await appendGoalDecision(cwd, run.id, {
             kind: args.run_id ? "update" : "create",
-            reason: `criteria=${run.successCriteria.length}; prerequisites=${run.prerequisites.length}; harness=${run.harness.length}; evidence_plan=${run.evidencePlan.length}; verifier=${run.verifier?.command ? "configured" : "missing"}`,
+            reason: `criteria=${run.successCriteria.length}; prerequisites=${run.prerequisites.length}; harness=${run.harness.length}; evidence_plan=${run.evidencePlan.length}; references=${run.references?.length ?? 0}; verifier=${run.verifier?.command ? "configured" : "missing"}`,
           });
           log("INFO", "goals", `Goal created: ${run.title}`, { id: run.id, status: run.status });
+          const setupMessage =
+            setupBlockers.length > 0 ? ` Setup blockers: ${setupBlockers.join(" ")}` : "";
           return goalHasBlockingPrerequisites(run)
-            ? `Goal ${args.run_id ? "updated" : "created"}: "${run.title}" (id: ${run.id.slice(0, 8)}, ${run.status}). User prerequisites: ${formatGoalBlockingPrerequisites(run)}`
-            : `Goal ${args.run_id ? "updated" : "created"}: "${run.title}" (id: ${run.id.slice(0, 8)}, ${run.status})`;
+            ? `Goal ${args.run_id ? "updated" : "created"}: "${run.title}" (id: ${run.id.slice(0, 8)}, ${run.status}). User prerequisites: ${formatGoalBlockingPrerequisites(run)}${setupMessage}`
+            : `Goal ${args.run_id ? "updated" : "created"}: "${run.title}" (id: ${run.id.slice(0, 8)}, ${run.status}).${setupMessage}`;
         }
 
         case "status": {
@@ -478,12 +553,17 @@ export function createGoalsTool(
           } else {
             prerequisites.push(patch);
           }
-          const stillBlocked = goalHasBlockingPrerequisites({ ...run, prerequisites });
-          const updated = await upsertGoalRun(cwd, {
+          const prerequisiteRun: GoalRun = {
             ...run,
             prerequisites,
-            status: stillBlocked ? "blocked" : "ready",
-            blockers: stillBlocked ? run.blockers : [],
+            status: goalHasBlockingPrerequisites({ ...run, prerequisites }) ? "blocked" : "ready",
+            blockers: goalHasBlockingPrerequisites({ ...run, prerequisites }) ? run.blockers : [],
+          };
+          const setupBlockers = setupBlockersForRun(prerequisiteRun);
+          const updated = await upsertGoalRun(cwd, {
+            ...prerequisiteRun,
+            status: statusAfterSetupCheck(prerequisiteRun, setupBlockers),
+            blockers: blockersAfterSetupCheck(prerequisiteRun, setupBlockers),
           });
           await appendGoalDecision(cwd, updated.id, {
             kind: "prerequisites",
@@ -508,6 +588,12 @@ export function createGoalsTool(
           if (!taskExisted && (!args.task_title || !args.task_prompt)) {
             return "Error: task_title and task_prompt are required when adding a task.";
           }
+          if (
+            !taskExisted &&
+            !referencesAcknowledged(run.references, [args.task_title ?? "", args.task_prompt ?? ""])
+          ) {
+            return "Error: task_prompt must explicitly include each non-prompt Goal reference id, label, URL, or path so workers cannot silently ignore the user's references.";
+          }
           const taskStatus = asTaskStatus(args.task_status);
           const updated = await updateGoalTask(cwd, run.id, taskId, {
             id: taskId,
@@ -519,10 +605,18 @@ export function createGoalsTool(
             ...(args.summary ? { lastSummary: args.summary } : {}),
           });
           const recovered = updated
-            ? await upsertGoalRun(updated.projectPath, {
-                ...updated,
-                status: statusAfterTaskPatch(updated, taskStatus),
-              })
+            ? await (async () => {
+                const taskPatchedRun: GoalRun = {
+                  ...updated,
+                  status: statusAfterTaskPatch(updated, taskStatus),
+                };
+                const setupBlockers = setupBlockersForRun(taskPatchedRun);
+                return upsertGoalRun(updated.projectPath, {
+                  ...taskPatchedRun,
+                  status: statusAfterSetupCheck(taskPatchedRun, setupBlockers),
+                  blockers: blockersAfterSetupCheck(taskPatchedRun, setupBlockers),
+                });
+              })()
             : null;
           if (!recovered) return `Error: no task found matching id "${taskId}".`;
           const updatedTask = recovered.tasks.find(
@@ -574,11 +668,17 @@ export function createGoalsTool(
           };
           const canRecoverBlockedRun =
             run.status === "blocked" && status === "ready" && !goalHasBlockingPrerequisites(run);
-          const updated = await upsertGoalRun(cwd, {
+          const evidencePlanRun: GoalRun = {
             ...run,
             evidencePlan,
             status: canRecoverBlockedRun ? "ready" : run.status,
             blockers: canRecoverBlockedRun ? [] : run.blockers,
+          };
+          const setupBlockers = setupBlockersForRun(evidencePlanRun);
+          const updated = await upsertGoalRun(cwd, {
+            ...evidencePlanRun,
+            status: statusAfterSetupCheck(evidencePlanRun, setupBlockers),
+            blockers: blockersAfterSetupCheck(evidencePlanRun, setupBlockers),
           });
           await appendGoalDecision(cwd, updated.id, {
             kind: "evidence_plan",

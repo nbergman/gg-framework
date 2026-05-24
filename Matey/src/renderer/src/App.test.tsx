@@ -58,7 +58,7 @@ describe("App desktop chat shell", () => {
     render(<App />);
 
     const send = screen.getByRole("button", { name: "Send message" });
-    expect(send).toBeDisabled();
+    expect(send).toHaveProperty("disabled", true);
 
     fireEvent.click(screen.getByRole("button", { name: "Attach file" }));
     expect(screen.getByText(/Local attachment ready/)).toBeTruthy();
@@ -83,7 +83,7 @@ describe("App desktop chat shell", () => {
 
     fireEvent.change(input, { target: { value: "Line one" } });
     fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
-    expect(input).toHaveValue("Line one");
+    expect(input).toHaveProperty("value", "Line one");
     fireEvent.keyDown(input, { key: "Enter" });
     expect(screen.getByText("Line one")).toBeTruthy();
   });

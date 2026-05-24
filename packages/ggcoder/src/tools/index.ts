@@ -19,6 +19,7 @@ import { localOperations, type ToolOperations } from "./operations.js";
 import type { ReadTracker } from "./read-tracker.js";
 import type { AgentDefinition } from "../core/agents.js";
 import type { Skill } from "../core/skills.js";
+import type { GoalReference } from "../core/goal-store.js";
 import type { GoalMode } from "../core/runtime-mode.js";
 
 export interface CreateToolsOptions {
@@ -34,6 +35,8 @@ export interface CreateToolsOptions {
   onFileRead?: (filePath: string) => void | Promise<void>;
   /** Callback after write/edit tools successfully mutate a file. */
   onFileMutated?: (filePath: string) => void | Promise<void>;
+  /** Getter for active /goal reference context while setup persists durable Goal state. */
+  getGoalReferences?: () => readonly GoalReference[] | undefined;
   /**
    * Getter for parent's prompt-cache routing key, evaluated lazily at
    * sub-agent spawn time. Returning a stable key from this getter lets every
@@ -68,7 +71,7 @@ export function createTools(cwd: string, opts?: CreateToolsOptions): CreateTools
     createWebFetchTool(),
     createTaskOutputTool(processManager),
     createTaskStopTool(processManager),
-    createGoalsTool(cwd, goalModeRef),
+    createGoalsTool(cwd, goalModeRef, opts?.getGoalReferences),
   ];
 
   // Add web search tool for providers without reliable native web search

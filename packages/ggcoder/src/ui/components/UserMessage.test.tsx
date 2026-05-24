@@ -29,7 +29,15 @@ describe("UserMessage", () => {
   it("collapses submitted multiline prompts into one displayed user row", () => {
     const output = renderUserMessage(<UserMessage text={"first\nsecond\n\nthird"} />);
 
-    expect(output).toContain("❯ first ⏎ second ⏎ third");
+    expect(output).toContain("> first ⏎ second ⏎ third");
     expect(output).not.toContain("\nsecond");
+  });
+
+  it("renders a Gemini-style full-width half-line padded message box", () => {
+    const output = renderUserMessage(<UserMessage text="hello" />);
+
+    expect(output).toContain("▄".repeat(100));
+    expect(output).toContain("> hello");
+    expect(output).toContain("▀".repeat(100));
   });
 });

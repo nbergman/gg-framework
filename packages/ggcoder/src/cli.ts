@@ -96,6 +96,7 @@ import type { OAuthCredentials, OAuthLoginCallbacks } from "./core/oauth/types.j
 import chalk from "chalk";
 import { checkAndAutoUpdate } from "./core/auto-update.js";
 import { parseGoalSyntheticEvent } from "./ui/goal-events.js";
+import type { GoalReference } from "./core/goal-store.js";
 import type { GoalMode } from "./core/runtime-mode.js";
 
 const _require = createRequire(import.meta.url);
@@ -610,6 +611,9 @@ async function runInkTUI(opts: {
 
   // Runtime mode refs — shared between tools and UI
   const goalModeRef = { current: "off" as GoalMode };
+  const goalReferencesRef: { current: readonly GoalReference[] | undefined } = {
+    current: undefined,
+  };
   const repoMapChangedFilesRef: { current: Set<string> } = { current: new Set() };
   const repoMapReadFilesRef: { current: Set<string> } = { current: new Set() };
   const toRepoMapPath = (root: string, filePath: string): string =>
@@ -629,6 +633,7 @@ async function runInkTUI(opts: {
     provider,
     model,
     goalModeRef,
+    getGoalReferences: () => goalReferencesRef.current,
     onFileRead: (filePath) => markRepoMapRead(cwd, filePath),
     onFileMutated: (filePath) => markRepoMapDirty(cwd, filePath),
   });
@@ -643,6 +648,7 @@ async function runInkTUI(opts: {
       provider,
       model,
       goalModeRef,
+      getGoalReferences: () => goalReferencesRef.current,
       onFileRead: (filePath) => markRepoMapRead(newCwd, filePath),
       onFileMutated: (filePath) => markRepoMapDirty(newCwd, filePath),
     });
@@ -791,6 +797,7 @@ async function runInkTUI(opts: {
     mcpManager,
     authStorage,
     goalModeRef,
+    goalReferencesRef,
     skills,
     initialOverlay: opts.initialOverlay,
     rebuildToolsForCwd,

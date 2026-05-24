@@ -82,6 +82,20 @@ export interface GoalEvidencePlan {
   evidence?: string;
 }
 
+export type GoalReferenceKind = "prompt" | "url" | "repo" | "file" | "image" | "text";
+
+export interface GoalReference {
+  id: string;
+  kind: GoalReferenceKind;
+  label: string;
+  value?: string;
+  path?: string;
+  mediaType?: string;
+  description?: string;
+  content?: string;
+  source?: string;
+}
+
 export interface GoalTask {
   id: string;
   title: string;
@@ -120,6 +134,7 @@ export interface GoalRun {
   prerequisites: GoalPrerequisite[];
   harness: GoalHarnessItem[];
   evidencePlan: GoalEvidencePlan[];
+  references?: GoalReference[];
   tasks: GoalTask[];
   evidence: GoalEvidence[];
   verifier?: GoalVerifier;
@@ -159,6 +174,7 @@ export interface GoalRunInput {
   prerequisites?: GoalPrerequisite[];
   harness?: GoalHarnessItem[];
   evidencePlan?: GoalEvidencePlan[];
+  references?: GoalReference[];
   tasks?: GoalTask[];
   evidence?: GoalEvidence[];
   verifier?: GoalVerifier;
@@ -241,6 +257,31 @@ function mergeGoalEvidence(
   return merged;
 }
 
+function mergeGoalReferences(
+  existing: GoalReference[],
+  input: GoalReference[] | undefined,
+): GoalReference[] {
+  if (!input) return existing;
+  const merged = [...existing];
+  const seen = new Set(
+    existing
+      .map((item) => item.id)
+      .concat(
+        existing.map(
+          (item) => `${item.kind}:${item.value ?? item.path ?? item.content ?? item.label}`,
+        ),
+      ),
+  );
+  for (const item of input) {
+    const identity = `${item.kind}:${item.value ?? item.path ?? item.content ?? item.label}`;
+    if (seen.has(item.id) || seen.has(identity)) continue;
+    seen.add(item.id);
+    seen.add(identity);
+    merged.push(item);
+  }
+  return merged;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -307,6 +348,17 @@ function isEvidenceMechanism(value: unknown): value is GoalEvidenceMechanism {
     value === "source" ||
     value === "file" ||
     value === "manual"
+  );
+}
+
+function isGoalReferenceKind(value: unknown): value is GoalReferenceKind {
+  return (
+    value === "prompt" ||
+    value === "url" ||
+    value === "repo" ||
+    value === "file" ||
+    value === "image" ||
+    value === "text"
   );
 }
 
@@ -377,6 +429,24 @@ function normalizeEvidencePlanItem(value: unknown): GoalEvidencePlan | null {
       ? { instructions: optionalString(value.instructions) }
       : {}),
     ...(optionalString(value.evidence) ? { evidence: optionalString(value.evidence) } : {}),
+  };
+}
+
+function normalizeReference(value: unknown): GoalReference | null {
+  if (!isObject(value)) return null;
+  const label = typeof value.label === "string" ? value.label : "Goal reference";
+  return {
+    id: typeof value.id === "string" ? value.id : randomUUID(),
+    kind: isGoalReferenceKind(value.kind) ? value.kind : "text",
+    label,
+    ...(optionalString(value.value) ? { value: optionalString(value.value) } : {}),
+    ...(optionalString(value.path) ? { path: optionalString(value.path) } : {}),
+    ...(optionalString(value.mediaType) ? { mediaType: optionalString(value.mediaType) } : {}),
+    ...(optionalString(value.description)
+      ? { description: optionalString(value.description) }
+      : {}),
+    ...(optionalString(value.content) ? { content: optionalString(value.content) } : {}),
+    ...(optionalString(value.source) ? { source: optionalString(value.source) } : {}),
   };
 }
 
@@ -475,6 +545,9 @@ function normalizeRun(value: unknown, fallbackProjectPath: string): GoalRun | nu
       ? value.evidencePlan
           .map(normalizeEvidencePlanItem)
           .filter((item): item is GoalEvidencePlan => !!item)
+      : [],
+    references: Array.isArray(value.references)
+      ? value.references.map(normalizeReference).filter((item): item is GoalReference => !!item)
       : [],
     tasks,
     evidence: Array.isArray(value.evidence)
@@ -726,6 +799,7 @@ export function createGoalRun(cwd: string, input: GoalRunInput): GoalRun {
     prerequisites,
     harness: input.harness ?? [],
     evidencePlan: input.evidencePlan ?? [],
+    references: input.references ?? [],
     tasks: input.tasks ?? [],
     evidence: input.evidence ?? [],
     ...(input.verifier ? { verifier: input.verifier } : {}),
@@ -857,6 +931,7 @@ export async function upsertGoalRun(cwd: string, input: GoalRun | GoalRunInput):
           prerequisites: input.prerequisites ?? existing.prerequisites,
           harness: input.harness ?? existing.harness,
           evidencePlan: input.evidencePlan ?? existing.evidencePlan,
+          references: mergeGoalReferences(existing.references ?? [], input.references),
           tasks: mergeGoalTasks(existing.tasks, input.tasks),
           evidence: mergeGoalEvidence(existing.evidence, input.evidence),
           blockers: input.blockers
@@ -1077,6 +1152,14 @@ async function writeGoalProgressJournalFromRun(cwd: string, run: GoalRun): Promi
     ...(run.prerequisites.length
       ? run.prerequisites.map(
           (item) => `- [${item.status}] ${item.label}${item.evidence ? ` — ${item.evidence}` : ""}`,
+        )
+      : ["- none"]),
+    "",
+    "## References",
+    ...(run.references?.length
+      ? run.references.map(
+          (item) =>
+            `- [${item.kind}] ${item.id}: ${item.label}${item.value ? ` — ${item.value}` : ""}${item.path ? ` (${item.path})` : ""}`,
         )
       : ["- none"]),
     "",

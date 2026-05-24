@@ -47,6 +47,8 @@ function promptAudit(prompt: string): { size: ReturnType<typeof promptSize>; fla
     "what observable artifact would prove the requested outcome worked end-to-end",
     "the simplest reliable local/free proof path",
     "generic tests, scripts, screenshots, benchmarks, or simulations; use them by default",
+    "After meaningful edits, run the relevant verification commands below",
+    "Run relevant checks after edits",
   ];
 
   for (const phrase of obsoleteOrContradictory) {
@@ -350,7 +352,7 @@ describe("buildSystemPrompt", () => {
       "ReferenceSources",
       "DiscoverRepos",
       "SearchCode literal text/RE2 (not semantic)",
-      "Never claim unrun or failing checks passed",
+      "Choose targeted verification appropriate to the change",
     ]) {
       expect(prompt).toContain(required);
     }

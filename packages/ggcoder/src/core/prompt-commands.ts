@@ -14,7 +14,7 @@ export const PROMPT_COMMANDS: PromptCommand[] = [
   {
     name: "goal",
     aliases: ["g"],
-    description: "Plan as needed, then create a programmatic goal loop",
+    description: "Create a durable Goal loop",
     // Contract anchors for the audit verifier: /goal setup is setup-only.
     // Do not implement; plan/research as needed first, then define success criteria, evidence_plan, verifier, and goals metadata, then stop.
     prompt: `Create a Goal run for the following objective. First plan/research only if needed; Goal setup will consume that plan and create durable Goal state.`,
@@ -22,7 +22,7 @@ export const PROMPT_COMMANDS: PromptCommand[] = [
   {
     name: "expand",
     aliases: [],
-    description: "Find high-value gaps by comparing this project to current alternatives",
+    description: "Find high-value project gaps",
     prompt: `# Expand: Current Competitive Gap Review
 
 Find high-value gaps by comparing this project to similar, adjacent, and best-in-class repositories/tools/websites/services. This command is project-agnostic: infer what THIS project is before choosing comparisons. This command is report-first: do not edit, install, or implement anything until the user chooses an option at the end.
@@ -139,7 +139,7 @@ After creating the Goal, tell the user exactly: "Goal created. Press CTRL + G to
   {
     name: "bullet-proof",
     aliases: ["bp"],
-    description: "Defensive security review — audit the project for exploitable weaknesses",
+    description: "Audit exploitable weaknesses",
     prompt: `# Bullet-Proof: Defensive Security Review
 
 You are a defensive security auditor reviewing this codebase to identify exploitable weaknesses so they can be patched before the project ships. Think rigorously about realistic threat scenarios — boundary checks, edge cases, race conditions, trust assumptions, supply-chain risks, agent-mediated paths.
@@ -330,7 +330,7 @@ Cite these as needed per audit. Do not dump them into the report — use them to
     description: "Generate or update CLAUDE.md for this project",
     prompt: `Generate or update a minimal CLAUDE.md with project-specific context only: what this project is, how it is structured, and commands/workflows that are unique to it.
 
-Do NOT add generic agent behavior already covered by the system prompt, including: read before edit/write, re-read after formatters, ask before destructive actions, no fake verification, generic code-quality advice, single-responsibility rules, one-file-per-component rules, or language-style conventions. Include only project-specific overrides or stricter local requirements.
+Do NOT add generic agent behavior already covered by the system prompt, including: read before edit/write, re-read after formatters, ask before destructive actions, no fake verification, generic code-quality advice, single-responsibility rules, one-file-per-component rules, or language-style conventions. Never add guidance that requires running checks, builds, or the full quality suite after every edit or every file change. Include only project-specific overrides or stricter local requirements.
 
 ## Step 1: Check if CLAUDE.md Exists
 
@@ -361,7 +361,7 @@ Check for config files:
 - go.mod -> Go
 - Cargo.toml -> Rust
 
-Extract exact commands that are useful project facts. Verify commands against local package scripts, manifests, Makefiles, CI, or documented project workflows; do not invent commands from convention alone. Do not restate generic "run checks after edits" behavior unless this project requires a stricter command sequence than the system prompt's Verification section.
+Extract exact commands that are useful project facts. Verify commands against local package scripts, manifests, Makefiles, CI, or documented project workflows; do not invent commands from convention alone. Do not restate generic "run checks after edits" behavior, and do not turn discovered commands into mandatory after-every-edit requirements unless local docs or CI explicitly require that stricter sequence.
 
 ## Step 4: Summarize Stable Structure
 
@@ -377,7 +377,7 @@ Create CLAUDE.md with only sections that add project-specific value. Prefer this
 - Exact local commands (install/build/check/test/dev/publish/deploy) when they are not obvious from package scripts alone
 - Project-specific constraints that override defaults (for example required publish order, generated-file workflow, auth/secrets storage, deployment caveats)
 
-Avoid generic sections named "Code Quality", "Organization Rules", or "How to Work" unless every bullet is specific to this project. Do not duplicate language style packs or generic verification rules. Do not add generated repo maps, symbol indexes, exhaustive file indexes, or auto-generated project inventories; CLAUDE.md must remain durable, agent-focused project context.
+Avoid generic sections named "Code Quality", "Organization Rules", or "How to Work" unless every bullet is specific to this project. Do not duplicate language style packs, generic verification rules, or boilerplate quality gates such as "After editing ANY file" / "Code Quality — Zero Tolerance". Do not add generated repo maps, symbol indexes, exhaustive file indexes, or auto-generated project inventories; CLAUDE.md must remain durable, agent-focused project context.
 
 Keep total file under 100 lines. If updating, preserve any custom sections the user added. After writing, re-read CLAUDE.md and confirm it contains only project-specific facts supported by local files.
 
@@ -390,7 +390,7 @@ End your reply with this exact notice so the user doesn't miss it:
   {
     name: "setup-commit",
     aliases: [],
-    description: "Generate a /commit command with quality checks",
+    description: "Generate a /commit command",
     prompt: `Detect the project type and generate a /commit command that enforces quality checks before committing.
 
 ## Step 1: Detect Project and Extract Commands
@@ -441,7 +441,7 @@ Report that /commit is now available with quality checks and AI-generated commit
   {
     name: "compare",
     aliases: [],
-    description: "Compare code against real-world implementations via kencode-search",
+    description: "Compare real-world code",
     prompt: `Compare the code you just created or modified in this conversation against real-world implementations using the \`mcp__kencode-search__searchCode\` tool.
 
 You already know what you just built. For each file you created or modified, use \`mcp__kencode-search__searchCode\` to search for how real projects implement the same patterns. Look at the specific APIs, hooks, functions, and architecture you used.
@@ -462,7 +462,7 @@ If the code aligns well with real-world patterns, say so. That's a good outcome.
   {
     name: "setup-skills",
     aliases: [],
-    description: "Audit project, recommend skills ranked by impact",
+    description: "Recommend useful skills",
     prompt: `# Skills Audit: Find useful skills for this project
 
 Analyze this project and recommend skills from the open ecosystem that would make **working on this project more efficient, easier, and safer**. That is the goal, full stop. Every recommendation must pass the test: does this skill save real time, lower real cognitive load, or prevent real mistakes for someone working on THIS project, repeatedly?
@@ -561,7 +561,7 @@ After presenting the list, ask which (if any) to install. Install nothing withou
   {
     name: "setup",
     aliases: ["setup-project"],
-    description: "Audit project hygiene, tooling, verify pipeline, and style-pack alignment",
+    description: "Audit project setup",
     prompt: `Audit this project across six categories and report gaps. **Do not fix anything yet.** Wait for me to choose what to address after the report.
 
 Language-agnostic and project-agnostic — adapt findings to the languages and stack actually present. Ignore categories that don't apply (e.g. skip CI for a local-only scratchpad).

@@ -124,8 +124,10 @@ function tokenToAnsi(
       }
     }
 
-    case "paragraph":
-      return gap + inlineToAnsi((token as Tokens.Paragraph).tokens ?? [], theme) + "\n";
+    case "paragraph": {
+      const inline = inlineToAnsi((token as Tokens.Paragraph).tokens ?? [], theme);
+      return gap + wrapAnsi(inline, Math.max(10, columns), { hard: true, wordWrap: true }) + "\n";
+    }
 
     case "list": {
       const list = token as Tokens.List;
@@ -149,7 +151,16 @@ function tokenToAnsi(
           })
           .join("");
 
-        return indent + bullet + content;
+        const prefix = indent + bullet;
+        const continuationPrefix = " ".repeat(prefix.length);
+        const wrapped = wrapAnsi(content, Math.max(10, columns - prefix.length), {
+          hard: true,
+          wordWrap: true,
+        });
+        return wrapped
+          .split("\n")
+          .map((line, lineIndex) => `${lineIndex === 0 ? prefix : continuationPrefix}${line}`)
+          .join("\n");
       });
       return gap + items.join("\n");
     }

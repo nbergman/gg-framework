@@ -35,6 +35,19 @@ describe("terminal history", () => {
     expect(rendered).toMatch(/^[⏺●] Hello/);
   });
 
+  it("hard-wraps long assistant words in durable terminal history", () => {
+    const item: CompletedItem = {
+      kind: "assistant",
+      text: "prefix " + "x".repeat(120),
+      id: "assistant-long-word",
+    };
+
+    const rendered = stripAnsi(serializeCompletedItemToTerminalHistory(item, context));
+
+    expect(rendered.split("\n").length).toBeGreaterThan(1);
+    expect(rendered).toContain("  x");
+  });
+
   it("serializes user rows as the prompt chip without adding a You label", () => {
     const item: CompletedItem = {
       kind: "user",
@@ -44,8 +57,24 @@ describe("terminal history", () => {
 
     const rendered = stripAnsi(serializeCompletedItemToTerminalHistory(item, context));
 
-    expect(rendered).toContain("❯ ship it");
+    expect(rendered).toContain("> ship it");
     expect(rendered).not.toContain("You");
+  });
+
+  it("renders terminal-history user rows with the same full-width shell as the input field", () => {
+    const item: CompletedItem = {
+      kind: "user",
+      text: "ship it",
+      id: "user-1",
+    };
+
+    const rendered = stripAnsi(serializeCompletedItemToTerminalHistory(item, context));
+
+    const lines = rendered.split("\n");
+    expect(lines[0]).toBe("▄".repeat(context.columns));
+    expect(lines[1]).toContain("> ship it");
+    expect(lines[1]).toHaveLength(context.columns);
+    expect(lines[2]).toBe("▀".repeat(context.columns));
   });
 
   it("collapses typed multiline prompts inside one user row", () => {
@@ -57,8 +86,9 @@ describe("terminal history", () => {
 
     const rendered = stripAnsi(serializeCompletedItemToTerminalHistory(item, context));
 
-    expect(rendered).toBe("❯ first line ⏎ second line ⏎ third line");
-    expect(rendered.match(/❯/g)).toHaveLength(1);
+    expect(rendered).toContain("> first line ⏎ second line ⏎ third line");
+    expect(rendered).not.toContain("\nsecond line");
+    expect(rendered.match(/>/g)).toHaveLength(1);
   });
 
   it("collapses pasted multiline prompts to the same single badge as live user rows", () => {
@@ -75,13 +105,13 @@ describe("terminal history", () => {
 
     const rendered = stripAnsi(serializeCompletedItemToTerminalHistory(item, context));
 
-    expect(rendered).toContain("❯ please read:");
+    expect(rendered).toContain("> please read:");
     expect(rendered).toContain("[Pasted text #17 +2 lines]");
     expect(rendered).toContain("then summarize");
     expect(rendered).not.toContain("line one");
     expect(rendered).not.toContain("line two");
     expect(rendered).not.toContain("\nline");
-    expect(rendered.match(/❯/g)).toHaveLength(1);
+    expect(rendered.match(/>/g)).toHaveLength(1);
   });
 
   it("serializes tool rows with status dots and the response gutter", () => {
@@ -116,6 +146,33 @@ describe("terminal history", () => {
 
     expect(rendered).toMatch(/^[⏺●] Searched for 1 pattern \(2 matches\)$/);
     expect(rendered).not.toContain("src/a.ts");
+  });
+
+  it("serializes grouped tool rows as one consolidated summary", () => {
+    const item: CompletedItem = {
+      kind: "tool_group",
+      id: "tool-group-1",
+      tools: [
+        {
+          toolCallId: "read-1",
+          name: "read",
+          args: { file_path: "src/a.ts" },
+          status: "done",
+          result: "1\tconst a = 1;",
+        },
+        {
+          toolCallId: "read-2",
+          name: "read",
+          args: { file_path: "src/b.ts" },
+          status: "done",
+          result: "1\tconst b = 1;",
+        },
+      ],
+    };
+
+    const rendered = stripAnsi(serializeCompletedItemToTerminalHistory(item, context));
+
+    expect(rendered).toMatch(/^[⏺●] Read 2 files$/);
   });
 
   it("serializes server search rows with quoted detail and response summary", () => {
@@ -199,8 +256,9 @@ describe("terminal history", () => {
     );
 
     const rendered = stripAnsi(output);
-    expect(rendered).toMatch(/toggle thinking\n\n❯ hello/);
-    expect(rendered).not.toMatch(/toggle thinking\n\n\n❯ hello/);
+    expect(rendered).toMatch(/toggle thinking\n\n▄+/);
+    expect(rendered).toContain("> hello");
+    expect(rendered).not.toMatch(/toggle thinking\n\n\n▄+/);
   });
 
   it("prints one leading separator and no trailing blank after finalized rows", () => {
@@ -230,7 +288,9 @@ describe("terminal history", () => {
     const item: CompletedItem = { kind: "user", text: "again", id: "user-1" };
 
     printer.print([item], context);
+    expect(printer.printedIds.has(item.id)).toBe(true);
     printer.clear();
+    expect(printer.printedIds.has(item.id)).toBe(false);
     printer.print([item], context);
 
     expect(output.match(/again/g)).toHaveLength(2);
