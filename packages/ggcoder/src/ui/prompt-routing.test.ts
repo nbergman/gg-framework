@@ -26,14 +26,36 @@ describe("Goal prompt routing", () => {
     expect(collected).not.toContain("diagnostic chatter");
   });
 
-  it("instructs Goal setup to persist planner output as durable summary evidence", () => {
+  it("instructs Goal setup to persist planner output as durable setup evidence", () => {
     const setupPrompt = buildGoalSetupPromptFromPlanner({
       originalGoalPrompt: "/goal ship it\n\n## Goal References (MANDATORY)\n\n- [original-goal-prompt] kind=prompt; label=\"Original Goal prompt\"",
       plannerOutput: "GOAL_PLAN\nresearch=none\nsuccess=ship\nEND_GOAL_PLAN",
     });
 
+    expect(setupPrompt).toContain("## Original Goal Objective");
     expect(setupPrompt).toContain("## Goal References (MANDATORY)");
     expect(setupPrompt).toContain("GOAL_PLAN\nresearch=none\nsuccess=ship\nEND_GOAL_PLAN");
-    expect(setupPrompt).toContain("Pass this exact planner output in the goals create summary");
+    expect(setupPrompt).toContain("Record this exact GOAL_PLAN as durable setup evidence");
+  });
+
+  it("strips the repeated slash-command preamble before setup handoff", () => {
+    const setupPrompt = buildGoalSetupPromptFromPlanner({
+      originalGoalPrompt: "Create a Goal run for the following objective. First plan/research only if needed; Goal setup will consume that plan and create durable Goal state.\n\n## User Instructions\n\nDo the thing",
+      plannerOutput: "GOAL_PLAN\nresearch=none\nEND_GOAL_PLAN",
+    });
+
+    expect(setupPrompt).toContain("## Original Goal Objective\n\nDo the thing");
+    expect(setupPrompt).not.toContain("Create a Goal run for the following objective");
+  });
+
+  it("falls back to a bounded GOAL_PLAN block when planner output is unusable", () => {
+    const setupPrompt = buildGoalSetupPromptFromPlanner({
+      originalGoalPrompt: "Do the thing",
+      plannerOutput: "I forgot the required block format.",
+    });
+
+    expect(setupPrompt).toContain("unknowns=planner_output_missing_or_invalid");
+    expect(setupPrompt.match(/^GOAL_PLAN$/gm)).toHaveLength(1);
+    expect(setupPrompt).not.toContain("I forgot the required block format.");
   });
 });

@@ -146,14 +146,11 @@ describe("goal worker failure propagation", () => {
     expect(prompt).toContain("task_id=task-a");
     expect(prompt).toContain("model the intended experience");
     expect(prompt).toContain("choose the required senses/signals");
-    expect(prompt).toContain(
-      "Create needed scripts/fixtures/harnesses only when they directly observe those signals",
-    );
-    expect(prompt).toContain("source_path/docs/kencode real-code research when relevant");
-    expect(prompt).toContain(
-      "do not default to generic tests, scripts, screenshots, benchmarks, or simulations",
-    );
-    expect(prompt).toContain("command/file evidence");
+    expect(prompt).toContain("simplest local/free proof path");
+    expect(prompt).toContain("when they directly observe those signals");
+    expect(prompt).toContain("source_path/docs/kencode research when relevant");
+    expect(prompt).toContain("do not default to generic artifacts");
+    expect(prompt).toContain("command/file/screenshot/log evidence");
     expect(prompt).toContain("isolated git worktree");
     expect(prompt).toContain("do not merge or touch the main checkout");
     expect(prompt).toContain("candidate packet");
