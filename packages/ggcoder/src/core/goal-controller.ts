@@ -499,10 +499,7 @@ function existingBlockedTaskWithTitle(run: GoalRun, title: string): GoalTask | u
   return run.tasks.find((task) => task.title === title && task.status === "blocked");
 }
 
-function reconcileExistingAutoTaskDecision(
-  task: GoalTask,
-  reason: string,
-): GoalControllerDecision {
+function reconcileExistingAutoTaskDecision(task: GoalTask, reason: string): GoalControllerDecision {
   if (task.status === "running" || task.status === "verifying") {
     return {
       kind: "wait",

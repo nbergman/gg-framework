@@ -564,19 +564,6 @@ async function runInkTUI(opts: {
   const goalReferencesRef: { current: readonly GoalReference[] | undefined } = {
     current: undefined,
   };
-  const repoMapChangedFilesRef: { current: Set<string> } = { current: new Set() };
-  const repoMapReadFilesRef: { current: Set<string> } = { current: new Set() };
-  const toRepoMapPath = (root: string, filePath: string): string =>
-    path.relative(root, filePath).split(path.sep).join("/");
-  const markRepoMapRead = (root: string, filePath: string): void => {
-    repoMapReadFilesRef.current.add(toRepoMapPath(root, filePath));
-  };
-  const markRepoMapDirty = (root: string, filePath: string): void => {
-    const relativePath = toRepoMapPath(root, filePath);
-    repoMapChangedFilesRef.current.add(relativePath);
-    repoMapReadFilesRef.current.add(relativePath);
-  };
-
   const { tools, processManager } = createTools(cwd, {
     agents,
     skills,
@@ -584,8 +571,6 @@ async function runInkTUI(opts: {
     model,
     goalModeRef,
     getGoalReferences: () => goalReferencesRef.current,
-    onFileRead: (filePath) => markRepoMapRead(cwd, filePath),
-    onFileMutated: (filePath) => markRepoMapDirty(cwd, filePath),
   });
 
   // Rebuilds the cwd-bound tools for a different project root. Used by the
@@ -599,8 +584,6 @@ async function runInkTUI(opts: {
       model,
       goalModeRef,
       getGoalReferences: () => goalReferencesRef.current,
-      onFileRead: (filePath) => markRepoMapRead(newCwd, filePath),
-      onFileMutated: (filePath) => markRepoMapDirty(newCwd, filePath),
     });
     return rebuilt;
   };
@@ -749,8 +732,6 @@ async function runInkTUI(opts: {
     skills,
     initialOverlay: opts.initialOverlay,
     rebuildToolsForCwd,
-    repoMapChangedFilesRef,
-    repoMapReadFilesRef,
     connectInitialMcpTools,
   });
 

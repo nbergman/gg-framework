@@ -365,7 +365,7 @@ Extract exact commands that are useful project facts. Verify commands against lo
 
 ## Step 4: Summarize Stable Structure
 
-If useful, create a concise structure summary for future agents showing only key stable directories and files with brief descriptions. Do NOT embed generated symbol maps, exhaustive file indexes, generated repo maps, auto-generated directory listings, or large trees in CLAUDE.md.
+If useful, create a concise structure summary for future agents showing only key stable directories and files with brief descriptions. Do NOT embed generated symbol maps, exhaustive file indexes, auto-generated directory listings, or large trees in CLAUDE.md.
 
 ## Step 5: Generate or Update CLAUDE.md
 
@@ -377,7 +377,7 @@ Create CLAUDE.md with only sections that add project-specific value. Prefer this
 - Exact local commands (install/build/check/test/dev/publish/deploy) when they are not obvious from package scripts alone
 - Project-specific constraints that override defaults (for example required publish order, generated-file workflow, auth/secrets storage, deployment caveats)
 
-Avoid generic sections named "Code Quality", "Organization Rules", or "How to Work" unless every bullet is specific to this project. Do not duplicate language style packs, generic verification rules, or boilerplate quality gates such as "After editing ANY file" / "Code Quality — Zero Tolerance". Do not add generated repo maps, symbol indexes, exhaustive file indexes, or auto-generated project inventories; CLAUDE.md must remain durable, agent-focused project context.
+Avoid generic sections named "Code Quality", "Organization Rules", or "How to Work" unless every bullet is specific to this project. Do not duplicate language style packs, generic verification rules, or boilerplate quality gates such as "After editing ANY file" / "Code Quality — Zero Tolerance". Do not add symbol indexes, exhaustive file indexes, or auto-generated project inventories; CLAUDE.md must remain durable, agent-focused project context.
 
 Keep total file under 100 lines. If updating, preserve any custom sections the user added. After writing, re-read CLAUDE.md and confirm it contains only project-specific facts supported by local files.
 

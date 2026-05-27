@@ -54,8 +54,6 @@ export interface RenderAppConfig {
   initialOverlay?: "pixel" | "goal";
   rebuildToolsForCwd?: (cwd: string) => AgentTool[];
   goalReferencesRef?: { current: readonly GoalReference[] | undefined };
-  repoMapChangedFilesRef?: { current: Set<string> };
-  repoMapReadFilesRef?: { current: Set<string> };
   connectInitialMcpTools?: () => Promise<AgentTool[]>;
 }
 
@@ -320,8 +318,6 @@ export async function renderApp(config: RenderAppConfig): Promise<void> {
             initialOverlay: config.initialOverlay,
             rebuildToolsForCwd: config.rebuildToolsForCwd,
             goalReferencesRef: config.goalReferencesRef,
-            repoMapChangedFilesRef: config.repoMapChangedFilesRef,
-            repoMapReadFilesRef: config.repoMapReadFilesRef,
             connectInitialMcpTools: config.connectInitialMcpTools,
             terminalHistoryPrinter,
             resetUI,

@@ -1261,7 +1261,9 @@ describe("goal controller", () => {
     };
 
     expect(
-      decideGoalNextAction(goalRun({ tasks: [verifierTask], verifier: { description: "Verifier" } })),
+      decideGoalNextAction(
+        goalRun({ tasks: [verifierTask], verifier: { description: "Verifier" } }),
+      ),
     ).toEqual({
       kind: "start_worker",
       task: verifierTask,

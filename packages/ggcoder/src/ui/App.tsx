@@ -101,18 +101,6 @@ import {
   type LanguageId,
 } from "../core/language-detector.js";
 import { detectVerifyCommands } from "../core/verify-commands.js";
-import {
-  buildRepoMap,
-  createRepoMapCache,
-  type RepoMapCache,
-  type RepoMapSnapshot,
-} from "../core/repomap.js";
-import { getRepoMapBudgetForContext } from "../core/repomap-budget.js";
-import {
-  getLatestUserText,
-  injectRepoMapContextMessages,
-  stripRepoMapContextMessages,
-} from "../core/repomap-context.js";
 import type { Skill } from "../core/skills.js";
 import {
   extractPlanSteps,
@@ -497,8 +485,6 @@ export interface AppProps {
   initialOverlay?: "pixel" | "goal";
   rebuildToolsForCwd?: (cwd: string) => AgentTool[];
   goalReferencesRef?: { current: readonly GoalReference[] | undefined };
-  repoMapChangedFilesRef?: { current: Set<string> };
-  repoMapReadFilesRef?: { current: Set<string> };
   connectInitialMcpTools?: () => Promise<AgentTool[]>;
   terminalHistoryPrinter?: TerminalHistoryPrinter;
   /**
@@ -665,12 +651,6 @@ export function App(props: AppProps) {
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel | undefined>(props.thinking);
   const [renderMarkdown, setRenderMarkdown] = useState(true);
   const messagesRef = useRef<Message[]>(props.sessionStore?.messages ?? props.messages);
-  const repoMapInjectionEnabledRef = useRef(true);
-  const repoMapDirtyRef = useRef(true);
-  const repoMapMarkdownRef = useRef("");
-  const repoMapSnapshotRef = useRef<RepoMapSnapshot | undefined>(undefined);
-  const repoMapChangedCountRef = useRef(0);
-  const repoMapCacheRef = useRef<RepoMapCache>(createRepoMapCache());
   const [planAutoExpand, setPlanAutoExpand] = useState(props.sessionStore?.planAutoExpand ?? false);
   const [goalAutoExpand, setGoalAutoExpand] = useState(props.sessionStore?.goalAutoExpand ?? false);
   const goalAutoExpandRef = useRef(props.sessionStore?.goalAutoExpand ?? false);
@@ -1358,93 +1338,33 @@ export function App(props: AppProps) {
     ],
   );
 
-  const getRepoMapSignalCount = useCallback((): number => {
-    return (
-      (props.repoMapChangedFilesRef?.current.size ?? 0) +
-      (props.repoMapReadFilesRef?.current.size ?? 0)
-    );
-  }, [props.repoMapChangedFilesRef, props.repoMapReadFilesRef]);
-
-  const getRepoMapBudget = useCallback((): number => {
-    return getRepoMapBudgetForContext({
-      messages: messagesRef.current,
-      readFileCount: props.repoMapReadFilesRef?.current.size ?? 0,
-    });
-  }, [props.repoMapReadFilesRef]);
-
-  const refreshRepoMap = useCallback(
-    async (latestUserPrompt?: string): Promise<string> => {
-      const rendered = await buildRepoMap({
-        cwd: cwdRef.current,
-        maxChars: getRepoMapBudget(),
-        changedFiles: [...(props.repoMapChangedFilesRef?.current ?? new Set<string>())],
-        readFiles: [...(props.repoMapReadFilesRef?.current ?? new Set<string>())],
-        focusTerms: latestUserPrompt ? [latestUserPrompt] : [],
-        cache: repoMapCacheRef.current,
-      });
-      repoMapMarkdownRef.current = rendered.markdown;
-      repoMapSnapshotRef.current = rendered.snapshot;
-      repoMapChangedCountRef.current = getRepoMapSignalCount();
-      repoMapDirtyRef.current = false;
-      return rendered.markdown;
-    },
-    [
-      getRepoMapBudget,
-      getRepoMapSignalCount,
-      props.repoMapChangedFilesRef,
-      props.repoMapReadFilesRef,
-    ],
-  );
-
-  const stripRepoMapMessages = useCallback((messages: readonly Message[]): Message[] => {
-    return stripRepoMapContextMessages(messages);
-  }, []);
-
-  const injectRepoMapContext = useCallback(
-    async (messages: Message[]): Promise<Message[]> => {
-      if (!repoMapInjectionEnabledRef.current) return stripRepoMapMessages(messages);
-      const stripped = stripRepoMapMessages(messages);
-      const latestUserPrompt = getLatestUserText(stripped);
-      const signalCount = getRepoMapSignalCount();
-      if (signalCount !== repoMapChangedCountRef.current) repoMapDirtyRef.current = true;
-      if (repoMapDirtyRef.current || !repoMapMarkdownRef.current) {
-        await refreshRepoMap(latestUserPrompt);
-      }
-      if (!repoMapMarkdownRef.current) return stripped;
-      return injectRepoMapContextMessages(stripped, repoMapMarkdownRef.current);
-    },
-    [props.repoMapChangedFilesRef, props.repoMapReadFilesRef, refreshRepoMap, stripRepoMapMessages],
-  );
-
   /**
    * transformContext callback for the agent loop.
    * Called before each LLM call and on context overflow.
-   * Compacts persistent chat only, then injects the dynamic repo map transiently.
    */
   const transformContext = useCallback(
     async (messages: Message[], options?: { force?: boolean }): Promise<Message[]> => {
-      const stripped = stripRepoMapMessages(messages);
       const settings = settingsRef.current;
       const autoCompact = settings?.get("autoCompact") ?? true;
       const threshold = settings?.get("compactThreshold") ?? 0.8;
 
       // Force-compact on context overflow regardless of settings
       if (options?.force) {
-        const result = await compactConversation(stripped);
-        if (result !== stripped) {
+        const result = await compactConversation(messages);
+        if (result !== messages) {
           messagesRef.current = result;
           await persistCompactedSession(result);
         }
         lastCompactionTimeRef.current = Date.now();
-        return injectRepoMapContext(result);
+        return result;
       }
 
-      if (!autoCompact) return injectRepoMapContext(stripped);
+      if (!autoCompact) return messages;
 
       // Time-based cooldown: skip if compaction ran within the last 30 seconds
       if (Date.now() - lastCompactionTimeRef.current < 30_000) {
         log("INFO", "compaction", `Skipping compaction — cooldown active`);
-        return injectRepoMapContext(stripped);
+        return messages;
       }
 
       const contextWindow = getContextWindow(currentModel, contextWindowOptions);
@@ -1452,25 +1372,18 @@ export function App(props: AppProps) {
       const tokensFresh = lastActualTokensTimestampRef.current > lastCompactionTimeRef.current;
       const actualTokens =
         lastActualTokensRef.current > 0 && tokensFresh ? lastActualTokensRef.current : undefined;
-      if (shouldCompact(stripped, contextWindow, threshold, actualTokens, reserveTokens)) {
-        const result = await compactConversation(stripped);
-        if (result !== stripped) {
+      if (shouldCompact(messages, contextWindow, threshold, actualTokens, reserveTokens)) {
+        const result = await compactConversation(messages);
+        if (result !== messages) {
           messagesRef.current = result;
           await persistCompactedSession(result);
         }
         lastCompactionTimeRef.current = Date.now();
-        return injectRepoMapContext(result);
+        return result;
       }
-      return injectRepoMapContext(stripped);
+      return messages;
     },
-    [
-      currentModel,
-      compactConversation,
-      contextWindowOptions,
-      injectRepoMapContext,
-      persistCompactedSession,
-      stripRepoMapMessages,
-    ],
+    [currentModel, compactConversation, contextWindowOptions, persistCompactedSession],
   );
 
   // ── Background task bar state (external store) ──────────
@@ -1529,7 +1442,6 @@ export function App(props: AppProps) {
     },
     {
       onComplete: useCallback(() => {
-        messagesRef.current = stripRepoMapMessages(messagesRef.current);
         persistNewMessages();
         // Auto-clear plan progress and approved plan when all steps are completed
         const steps = planStepsRef.current;
@@ -1588,7 +1500,6 @@ export function App(props: AppProps) {
         }
       }, [
         persistNewMessages,
-        stripRepoMapMessages,
         props.cwd,
         props.skills,
         currentProvider,
@@ -2521,53 +2432,6 @@ export function App(props: AppProps) {
         return;
       }
 
-      // Handle /map — show, refresh, or toggle dynamic repo map injection
-      if (
-        trimmed === "/map" ||
-        trimmed === "/map refresh" ||
-        trimmed === "/map on" ||
-        trimmed === "/map off"
-      ) {
-        const action = trimmed.slice("/map".length).trim();
-        if (action === "on") {
-          repoMapInjectionEnabledRef.current = true;
-          repoMapDirtyRef.current = true;
-          setLiveItems((prev) => [
-            ...prev,
-            { kind: "info", text: "Dynamic repo map injection is on.", id: getId() },
-          ]);
-          return;
-        }
-        if (action === "off") {
-          repoMapInjectionEnabledRef.current = false;
-          messagesRef.current = stripRepoMapMessages(messagesRef.current);
-          setLiveItems((prev) => [
-            ...prev,
-            {
-              kind: "info",
-              text: "Dynamic repo map injection is off for this session.",
-              id: getId(),
-            },
-          ]);
-          return;
-        }
-        if (action === "refresh") repoMapDirtyRef.current = true;
-        const markdown = await refreshRepoMap(getLatestUserText(messagesRef.current));
-        setLiveItems((prev) => [
-          ...prev,
-          {
-            kind: "info",
-            text: formatRepoMapCommandOutput(
-              repoMapInjectionEnabledRef.current,
-              markdown,
-              action === "refresh",
-            ),
-            id: getId(),
-          },
-        ]);
-        return;
-      }
-
       // Handle /goals — open the input-area goal picker.
       if (trimmed === "/goals") {
         setGoalPickerGoals(loadGoalRunsSync(displayedCwd));
@@ -2757,12 +2621,10 @@ export function App(props: AppProps) {
       props.resetUI,
       props.sessionStore,
       rebuildSystemPrompt,
-      refreshRepoMap,
       reloadCustomCommands,
       replaceSystemPrompt,
       setActiveGoalReferences,
       setGoalModeAndPrompt,
-      stripRepoMapMessages,
     ],
   );
 
@@ -3639,7 +3501,6 @@ export function App(props: AppProps) {
           return;
         if (activeVerifierRunIdsRef.current.size > 0) return;
         const runs = await loadGoalRuns(completion.worker.projectPath);
-        const latestRun = runs.find((item) => item.id === completion.worker.goalRunId);
         const queued = runs.find((item) => goalRunNeedsExplicitContinuationAfterWorker(item));
         if (queued) setTimeout(() => continueGoalRun(queued.id), 750);
       })().catch((err: unknown) =>
@@ -4256,13 +4117,6 @@ export function App(props: AppProps) {
             log("WARN", "pixel", `chdir failed: ${(err as Error).message}`);
           }
           cwdRef.current = prep.projectPath;
-          repoMapDirtyRef.current = true;
-          repoMapMarkdownRef.current = "";
-          repoMapSnapshotRef.current = undefined;
-          repoMapChangedCountRef.current = 0;
-          repoMapCacheRef.current = createRepoMapCache();
-          props.repoMapChangedFilesRef?.current.clear();
-          props.repoMapReadFilesRef?.current.clear();
           setDisplayedCwd(prep.projectPath);
           let toolsForPixelFix = currentToolsRef.current;
           if (props.rebuildToolsForCwd) {
@@ -4913,16 +4767,4 @@ export function App(props: AppProps) {
       )}
     </Box>
   );
-}
-
-function formatRepoMapCommandOutput(
-  enabled: boolean,
-  markdown: string,
-  refreshed: boolean,
-): string {
-  const status = enabled ? "on" : "off";
-  const prefix = refreshed
-    ? `Dynamic repo map refreshed · injection: ${status}`
-    : `Dynamic repo map · injection: ${status}`;
-  return `${prefix}\n\n${markdown}`;
 }
