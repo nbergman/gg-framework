@@ -776,6 +776,99 @@ describe("goals tool state guards", () => {
     expect(run?.verifier?.command).toBe("pnpm test:e2e");
   });
 
+  it("adds new evidence-plan items directly after minimal Goal creation", async () => {
+    await executeGoals({
+      action: "create",
+      run_id: "goal-evidence-plan-add",
+      title: "Proof plan add",
+      goal: "Add proof paths after initial Goal creation",
+      success_criteria: ["Evidence plan can be added after create"],
+      verifier_command: "pnpm test",
+    });
+
+    const result = await executeGoals({
+      action: "evidence_plan",
+      run_id: "goal-evidence-plan-add",
+      evidence_plan: [
+        {
+          id: "manual-proof",
+          label: "Manual setup proof",
+          mechanism: "manual",
+          description: "Manual inspection proves setup worked.",
+          status: "planned",
+        },
+      ],
+    });
+    const run = await getGoalRun(tmpProject, "goal-evidence-plan-add");
+
+    expect(result).toBe('Evidence-plan item added for "Proof plan add": "Manual setup proof".');
+    expect(run?.status).toBe("ready");
+    expect(run?.blockers).toEqual([]);
+    expect(run?.evidencePlan).toEqual([
+      expect.objectContaining({
+        id: "manual-proof",
+        label: "Manual setup proof",
+        mechanism: "manual",
+        status: "planned",
+      }),
+    ]);
+  });
+
+  it("upserts evidence-plan items from evidence_plan arrays", async () => {
+    await executeGoals({
+      action: "create",
+      run_id: "goal-evidence-plan-upsert",
+      title: "Proof plan upsert",
+      goal: "Update proof paths from an array call",
+      success_criteria: ["Evidence plan can be upserted"],
+      verifier_command: "pnpm test",
+      evidence_plan: [
+        {
+          id: "manual-proof",
+          label: "Manual setup proof",
+          mechanism: "manual",
+          description: "Manual inspection proves setup worked.",
+          status: "planned",
+        },
+      ],
+    });
+
+    const result = await executeGoals({
+      action: "evidence_plan",
+      run_id: "goal-evidence-plan-upsert",
+      evidence_plan: [
+        {
+          id: "manual-proof",
+          label: "Manual setup proof updated",
+          mechanism: "manual",
+          description: "Manual inspection now has durable evidence.",
+          status: "ready",
+          evidence: "inspection recorded",
+        },
+        {
+          id: "log-proof",
+          label: "Log proof",
+          mechanism: "log",
+          description: "Inspect durable setup log.",
+          status: "planned",
+          path: "artifacts/setup.log",
+        },
+      ],
+    });
+    const run = await getGoalRun(tmpProject, "goal-evidence-plan-upsert");
+
+    expect(result).toBe('Evidence-plan items upserted for "Proof plan upsert": 1 added, 1 updated.');
+    expect(run?.evidencePlan).toEqual([
+      expect.objectContaining({
+        id: "manual-proof",
+        label: "Manual setup proof updated",
+        status: "ready",
+        evidence: "inspection recorded",
+      }),
+      expect.objectContaining({ id: "log-proof", label: "Log proof", path: "artifacts/setup.log" }),
+    ]);
+  });
+
   it("updates evidence-plan items directly for post-verifier reconciliation", async () => {
     await executeGoals({
       action: "create",

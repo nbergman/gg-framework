@@ -30,6 +30,7 @@ import { useAgentLoop, type StreamSnapshot, type UserContent } from "./hooks/use
 import { UserMessage } from "./components/UserMessage.js";
 import type { PasteInfo } from "./components/InputArea.js";
 import { AssistantMessage } from "./components/AssistantMessage.js";
+import { MessageResponse } from "./components/MessageResponse.js";
 import { ToolExecution } from "./components/ToolExecution.js";
 import { ToolUseLoader } from "./components/ToolUseLoader.js";
 import { ToolGroupExecution } from "./components/ToolGroupExecution.js";
@@ -67,7 +68,7 @@ import { useTerminalTitle } from "./hooks/useTerminalTitle.js";
 import { getGitBranch } from "../utils/git.js";
 import { getModel, getContextWindow } from "../core/model-registry.js";
 import { BLACK_CIRCLE } from "./constants/figures.js";
-import { SessionManager } from "../core/session-manager.js";
+import { DISPLAY_ITEM_CUSTOM_KIND, SessionManager } from "../core/session-manager.js";
 import {
   appendMessagesToSession as appendSessionMessages,
   createCompactedSessionCheckpoint,
@@ -128,6 +129,7 @@ import {
   loadGoalRuns,
   loadGoalRunsSync,
   reconcileActiveGoalRuns,
+  saveGoalRuns,
   saveGoalRunsSync,
   updateGoalTask,
   upsertGoalRun,
@@ -355,7 +357,7 @@ export function buildGoalDirtyWorktreeUserPrompt(error: GoalWorktreeDirtyError):
   return (
     `A Goal worker could not start because the project needs a clean working tree before GG Coder can create an isolated Goal worktree.\n\n` +
     `Dirty files from \`git status --porcelain\`:\n${error.dirtyStatus}\n\n` +
-    `Explain this clearly to the user in one short message. Ask whether they want you to commit the current changes, stash them, or pause the Goal. Do not run git commit, git stash, or discard changes unless the user explicitly chooses one.`
+    `Explain this clearly to the user in one short message. Ask whether they want you to commit the current changes, stash them, or pause the Goal. If the user chooses commit, inspect \`git status --porcelain\`, stage only the listed dirty files the user approved, run an appropriate git commit command, then resume/continue the Goal only after the working tree is clean. Do not run git commit, git stash, or discard changes unless the user explicitly chooses one.`
   );
 }
 
@@ -363,8 +365,54 @@ export function goalDirtyWorktreeInfoText(): string {
   return "Goal paused: your working tree has uncommitted changes. Asking whether to commit or stash them before starting isolated Goal workers.";
 }
 
+function summarizeDirtyStatusForBlocker(dirtyStatus: string): string {
+  return dirtyStatus
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("; ");
+}
+
+function buildGoalPauseRun(run: GoalRun, blocker: string): GoalRun {
+  return {
+    ...run,
+    status: "paused",
+    activeWorkerId: undefined,
+    continueRequestedAt: undefined,
+    blockers: Array.from(new Set([...run.blockers, blocker])),
+  };
+}
+
+export function buildGoalDirtyWorktreePauseRun(
+  run: GoalRun,
+  error: GoalWorktreeDirtyError,
+): GoalRun {
+  return buildGoalPauseRun(
+    run,
+    `Goal worker startup is awaiting a human choice because the working tree has uncommitted changes: ${summarizeDirtyStatusForBlocker(error.dirtyStatus)}. Commit the current changes, stash them, or keep the Goal paused before starting isolated Goal workers.`,
+  );
+}
+
+export function buildGoalUserPauseRun(run: GoalRun): GoalRun {
+  return buildGoalPauseRun(
+    run,
+    "Goal paused by user from the mini TUI; auto-continuation is stopped until resumed.",
+  );
+}
+
 export function goalRunNeedsExplicitContinuationAfterWorker(run: GoalRun | undefined): boolean {
   return !!run?.continueRequestedAt && !goalHasBlockingPrerequisites(run);
+}
+
+export function shouldKeepGoalRunTrackedAfterDecision(
+  decision: ReturnType<typeof decideGoalNextAction>,
+): boolean {
+  return (
+    decision.kind === "start_worker" ||
+    decision.kind === "run_verifier" ||
+    decision.kind === "create_task" ||
+    (decision.kind === "wait" && decision.workerId !== undefined)
+  );
 }
 
 function goalProgressLoaderStatus(item: GoalProgressItem): "running" | "done" | "error" {
@@ -773,6 +821,7 @@ export function App(props: AppProps) {
   );
 
   const pendingHistoryFlushRef = useRef<CompletedItem[]>([]);
+  const persistedDisplayItemIdsRef = useRef<Set<string>>(new Set());
   const streamedAssistantFlushRef = useRef<{ flushedChars: number; text: string }>({
     flushedChars: 0,
     text: "",
@@ -784,6 +833,22 @@ export function App(props: AppProps) {
       const flushed = trimFlushedItems(items);
       if (flushed.length === 0) return;
       pendingHistoryFlushRef.current = [...pendingHistoryFlushRef.current, ...flushed];
+      const sessionPath = sessionPathRef.current;
+      const sessionManager = sessionManagerRef.current;
+      if (sessionPath && sessionManager) {
+        for (const item of flushed) {
+          if (persistedDisplayItemIdsRef.current.has(item.id)) continue;
+          persistedDisplayItemIdsRef.current.add(item.id);
+          void sessionManager.appendEntry(sessionPath, {
+            type: "custom",
+            kind: DISPLAY_ITEM_CUSTOM_KIND,
+            data: { version: 1, item },
+            id: `display-${item.id}`,
+            parentId: null,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
       if (sessionStore) {
         const queuedIds = new Set(items.map((item) => item.id));
         sessionStore.liveItems = removeItemsWithIds(
@@ -2853,9 +2918,9 @@ export function App(props: AppProps) {
     glyph: string,
     content: React.ReactNode,
     glyphColor = theme.commandColor,
-    options: { bold?: boolean; muted?: boolean } = {},
+    options: { bold?: boolean; muted?: boolean; marginTop?: number } = {},
   ) => (
-    <Box key={key} flexDirection="row" paddingLeft={1} marginTop={1} flexShrink={1}>
+    <Box key={key} flexDirection="row" paddingLeft={1} marginTop={options.marginTop ?? 1} flexShrink={1}>
       <Box width={2} flexShrink={0}>
         <Text color={glyphColor} bold={options.bold ?? true}>
           {glyph}
@@ -2893,14 +2958,7 @@ export function App(props: AppProps) {
         ? 1
         : 0;
 
-    const withPrintedBoundarySpacing = (node: React.ReactNode): React.ReactNode =>
-      shouldTopSpacePrintedBoundary ? (
-        <Box key={`${item.id}-printed-boundary`} flexDirection="column" marginTop={1}>
-          {node}
-        </Box>
-      ) : (
-        node
-      );
+    const withPrintedBoundarySpacing = (node: React.ReactNode): React.ReactNode => node;
 
     switch (item.kind) {
       case "tombstone":
@@ -2938,23 +2996,53 @@ export function App(props: AppProps) {
       case "goal_progress": {
         const color = goalProgressColor(item, theme);
         const loaderStatus = goalProgressLoaderStatus(item);
-        const suffix = [item.workerId ? `worker ${item.workerId}` : undefined, item.detail]
-          .filter((part): part is string => !!part?.trim())
-          .join(" · ");
-        const text = suffix ? `${item.title} · ${suffix}` : item.title;
+        const workerSuffix = item.workerId ? ` · worker ${item.workerId}` : "";
+        const titleText = `${item.title}${workerSuffix}`;
+        const hasResponseBody =
+          !!item.detail || !!item.summaryRows?.length || !!item.summarySections?.length;
         return withPrintedBoundarySpacing(
-          <Box key={item.id} flexDirection="row" paddingLeft={1} marginTop={1} width={columns}>
-            <ToolUseLoader status={loaderStatus} staticDisplay color={color} />
-            <Text color={color} bold wrap="truncate">
-              {truncateGoalProgressText(text, Math.max(8, columns - 4))}
-            </Text>
+          <Box key={item.id} flexDirection="column" marginTop={1} width={columns}>
+            <Box flexDirection="row" paddingLeft={1} width={columns}>
+              <ToolUseLoader status={loaderStatus} staticDisplay color={color} />
+              <Text color={color} bold wrap="truncate">
+                {truncateGoalProgressText(titleText, Math.max(8, columns - 4))}
+              </Text>
+            </Box>
+            {hasResponseBody ? (
+              <MessageResponse>
+                <Box flexDirection="column" flexShrink={1}>
+                  {item.detail ? (
+                    <Text color={theme.textDim} wrap="wrap">
+                      {item.detail}
+                    </Text>
+                  ) : null}
+                  {item.summaryRows?.map((row) => (
+                    <Text key={`${item.id}-${row.label}`} wrap="wrap">
+                      <Text color={theme.textDim}>{row.label.padEnd(12)}</Text>
+                      <Text color={theme.text}>{row.value}</Text>
+                      {row.detail ? <Text color={theme.textDim}>{` · ${row.detail}`}</Text> : null}
+                    </Text>
+                  ))}
+                  {item.summarySections?.map((section) => (
+                    <Box key={`${item.id}-${section.title}`} flexDirection="column" flexShrink={1}>
+                      <Text color={theme.textDim}>{section.title}</Text>
+                      {section.lines.map((line, lineIndex) => (
+                        <Text key={`${item.id}-${section.title}-${lineIndex}`} color={theme.text} wrap="wrap">
+                          {`• ${line}`}
+                        </Text>
+                      ))}
+                    </Box>
+                  ))}
+                </Box>
+              </MessageResponse>
+            ) : null}
           </Box>,
         );
       }
       case "style_pack": {
         const names = item.added.map((id) => LANGUAGE_DISPLAY_NAMES[id]);
         const headerLabel = item.added.length > 1 ? "STYLE PACKS ACTIVE" : "STYLE PACK ACTIVE";
-        return (
+        return withPrintedBoundarySpacing(
           <Box key={item.id} paddingLeft={1} marginTop={1} flexShrink={1}>
             <Box
               flexShrink={1}
@@ -2988,11 +3076,11 @@ export function App(props: AppProps) {
                 </Box>
               )}
             </Box>
-          </Box>
+          </Box>,
         );
       }
       case "setup_hint":
-        return (
+        return withPrintedBoundarySpacing(
           <Box key={item.id} paddingLeft={1} marginTop={1} flexShrink={1}>
             <Box
               flexShrink={1}
@@ -3024,7 +3112,7 @@ export function App(props: AppProps) {
                 </Text>
               </Box>
             </Box>
-          </Box>
+          </Box>,
         );
       case "assistant":
         return (
@@ -3087,7 +3175,7 @@ export function App(props: AppProps) {
         );
       case "error": {
         const showMessage = item.message && item.message !== item.headline;
-        return (
+        return withPrintedBoundarySpacing(
           <Box key={item.id} flexDirection="row" paddingLeft={1} marginTop={1} flexShrink={1}>
             <Box width={2} flexShrink={0}>
               <Text color={theme.error} bold>
@@ -3105,36 +3193,42 @@ export function App(props: AppProps) {
               )}
               <Text color={theme.textDim} wrap="wrap">{`→ ${item.guidance}`}</Text>
             </Box>
-          </Box>
+          </Box>,
         );
       }
       case "info":
-        return renderStatusMessage(item.id, "○ ", item.text, theme.commandColor, { muted: true });
+        return withPrintedBoundarySpacing(
+          renderStatusMessage(item.id, "○ ", item.text, theme.commandColor, { muted: true }),
+        );
       case "update_notice":
-        return (
+        return withPrintedBoundarySpacing(
           <Box key={item.id} paddingLeft={1} marginTop={1} flexShrink={1}>
             <Box flexShrink={1} borderStyle="round" borderColor={theme.commandColor} paddingX={1}>
               <Text color={theme.commandColor} bold wrap="wrap">
                 {UPDATE_NOTICE_TEXT}
               </Text>
             </Box>
-          </Box>
+          </Box>,
         );
       case "plan_transition":
-        return renderStatusMessage(
-          item.id,
-          `${BLACK_CIRCLE} `,
-          normalizeStatusText(item.text),
-          theme.commandColor,
-          { bold: true },
+        return withPrintedBoundarySpacing(
+          renderStatusMessage(
+            item.id,
+            `${BLACK_CIRCLE} `,
+            normalizeStatusText(item.text),
+            theme.commandColor,
+            { bold: true },
+          ),
         );
       case "goal_agent_transition":
-        return renderStatusMessage(
-          item.id,
-          `${BLACK_CIRCLE} `,
-          normalizeStatusText(item.text),
-          theme.commandColor,
-          { bold: true },
+        return withPrintedBoundarySpacing(
+          renderStatusMessage(
+            item.id,
+            `${BLACK_CIRCLE} `,
+            normalizeStatusText(item.text),
+            theme.commandColor,
+            { bold: true },
+          ),
         );
       case "task":
         return withPrintedBoundarySpacing(
@@ -3152,30 +3246,34 @@ export function App(props: AppProps) {
           ),
         );
       case "model_transition":
-        return renderStatusMessage(
-          item.id,
-          "▸ ",
-          <>
-            <Text color={theme.textDim}>{"Switched to "}</Text>
-            <Text color={theme.commandColor} bold>
-              {item.modelName}
-            </Text>
-          </>,
-          theme.commandColor,
-          { bold: true },
+        return withPrintedBoundarySpacing(
+          renderStatusMessage(
+            item.id,
+            "▸ ",
+            <>
+              <Text color={theme.textDim}>{"Switched to "}</Text>
+              <Text color={theme.commandColor} bold>
+                {item.modelName}
+              </Text>
+            </>,
+            theme.commandColor,
+            { bold: true },
+          ),
         );
       case "theme_transition":
-        return renderStatusMessage(
-          item.id,
-          "◐ ",
-          <>
-            <Text color={theme.textDim}>{"Theme switched to "}</Text>
-            <Text color={theme.commandColor} bold>
-              {item.themeName}
-            </Text>
-          </>,
-          theme.commandColor,
-          { bold: true },
+        return withPrintedBoundarySpacing(
+          renderStatusMessage(
+            item.id,
+            "◐ ",
+            <>
+              <Text color={theme.textDim}>{"Theme switched to "}</Text>
+              <Text color={theme.commandColor} bold>
+                {item.themeName}
+              </Text>
+            </>,
+            theme.commandColor,
+            { bold: true },
+          ),
         );
       case "plan_event": {
         // Plan-domain status changes (approve / reject / dismiss). Use the
@@ -3186,27 +3284,31 @@ export function App(props: AppProps) {
             : item.event === "rejected"
               ? "Plan rejected"
               : "Plan dismissed";
-        return renderStatusMessage(
-          item.id,
-          "○ ",
-          <>
-            <Text>{label}</Text>
-            {item.detail ? <Text color={theme.textDim}>{` — "${item.detail}"`}</Text> : null}
-          </>,
-          theme.commandColor,
-          { bold: true },
+        return withPrintedBoundarySpacing(
+          renderStatusMessage(
+            item.id,
+            "○ ",
+            <>
+              <Text>{label}</Text>
+              {item.detail ? <Text color={theme.textDim}>{` — "${item.detail}"`}</Text> : null}
+            </>,
+            theme.commandColor,
+            { bold: true },
+          ),
         );
       }
       case "stopped":
         // Cancellation / abort acknowledgement (ESC, auto-setup cancel, etc.).
         // Muted dim treatment — this is an ack, not a state change worth a
         // gradient. Glyph `⊘` reads as "stop" without being alarming.
-        return renderStatusMessage(
-          item.id,
-          "⊘ ",
-          normalizeStatusText(item.text),
-          theme.commandColor,
-          { bold: true },
+        return withPrintedBoundarySpacing(
+          renderStatusMessage(
+            item.id,
+            "⊘ ",
+            normalizeStatusText(item.text),
+            theme.commandColor,
+            { bold: true },
+          ),
         );
       case "step_done":
         return (
@@ -3246,16 +3348,16 @@ export function App(props: AppProps) {
         );
       }
       case "compacting":
-        return <CompactionSpinner key={item.id} staticDisplay />;
+        return withPrintedBoundarySpacing(<CompactionSpinner key={item.id} staticDisplay />);
       case "compacted":
-        return (
+        return withPrintedBoundarySpacing(
           <CompactionDone
             key={item.id}
             originalCount={item.originalCount}
             newCount={item.newCount}
             tokensBefore={item.tokensBefore}
             tokensAfter={item.tokensAfter}
-          />
+          />,
         );
       case "duration":
         return (
@@ -3362,6 +3464,10 @@ export function App(props: AppProps) {
           return;
         }
         const decision = decideGoalNextAction(latestRun);
+        if (!shouldKeepGoalRunTrackedAfterDecision(decision)) {
+          runningGoalIdsRef.current.delete(runId);
+          clearGoalModeIfIdle();
+        }
         if (decision.kind === "wait") return;
         const choiceKey = getGoalContinuationChoiceKey({ runId: latestRun.id, decision });
         const now = Date.now();
@@ -3581,6 +3687,9 @@ export function App(props: AppProps) {
 
         const decision = decideGoalNextAction(checkedRun);
         await appendGoalDecision(props.cwd, checkedRun.id, decision);
+        if (!shouldKeepGoalRunTrackedAfterDecision(decision)) {
+          runningGoalIdsRef.current.delete(checkedRun.id);
+        }
         if (decision.kind === "terminal") {
           const terminalProgress = formatGoalTerminalProgress(checkedRun);
           if (terminalProgress) {
@@ -3780,11 +3889,24 @@ export function App(props: AppProps) {
           goalNumber: goalNumberForRun(checkedRun.id),
           ...goalTaskProgress(checkedRun, decision.task),
         });
-      })().catch((err: unknown) => {
+      })().catch(async (err: unknown) => {
         clearGoalStatusEntry(run.id);
         clearGoalModeIfIdle();
         log("ERROR", "goal", err instanceof Error ? err.message : String(err));
         if (isGoalWorktreeDirtyError(err)) {
+          const latestRun = (await loadGoalRuns(props.cwd)).find((item) => item.id === run.id) ?? run;
+          const pausedRun = await upsertGoalRun(
+            props.cwd,
+            buildGoalDirtyWorktreePauseRun(latestRun, err),
+          );
+          runningGoalIdsRef.current.delete(pausedRun.id);
+          appendGoalProgress({
+            kind: "goal_progress",
+            phase: "terminal",
+            title: `Goal paused: ${pausedRun.title}`,
+            detail: "Working tree has uncommitted changes; waiting for the user to choose commit, stash, or pause.",
+            status: "paused",
+          });
           setLiveItems((prev) => [
             ...prev,
             { kind: "info", text: goalDirtyWorktreeInfoText(), id: getId() },
@@ -3996,11 +4118,7 @@ export function App(props: AppProps) {
         runningGoalIdsRef.current.delete(run.id);
         if (run.activeWorkerId) await stopGoalWorker(run.activeWorkerId);
         const latestRun = (await loadGoalRuns(props.cwd)).find((item) => item.id === run.id) ?? run;
-        await upsertGoalRun(props.cwd, {
-          ...latestRun,
-          status: "paused",
-          activeWorkerId: undefined,
-        });
+        await upsertGoalRun(props.cwd, buildGoalUserPauseRun(latestRun));
         appendGoalProgress({
           kind: "goal_progress",
           phase: "terminal",
@@ -4672,11 +4790,23 @@ export function App(props: AppProps) {
                 });
               }}
               onDeleteGoal={(run) => {
-                const nextGoals = loadGoalRunsSync(props.cwd).filter(
-                  (candidate) => candidate.id !== run.id,
-                );
-                saveGoalRunsSync(props.cwd, nextGoals);
-                setGoalPickerGoals(nextGoals);
+                setGoalPickerOpen(false);
+                runningGoalIdsRef.current.delete(run.id);
+                void (async () => {
+                  const latestRun =
+                    (await loadGoalRuns(props.cwd)).find((item) => item.id === run.id) ?? run;
+                  if (latestRun.activeWorkerId) await stopGoalWorker(latestRun.activeWorkerId);
+                  const nextGoals = (await loadGoalRuns(props.cwd)).filter(
+                    (candidate) => candidate.id !== run.id,
+                  );
+                  await saveGoalRuns(props.cwd, nextGoals);
+                  setGoalPickerGoals(nextGoals);
+                  clearGoalStatusEntry(run.id);
+                  clearGoalModeIfIdle();
+                })().catch((err: unknown) => {
+                  log("ERROR", "goal", err instanceof Error ? err.message : String(err));
+                  setLiveItems((prev) => [...prev, toErrorItem(err, getId(), "Goal")]);
+                });
               }}
               onPauseGoal={(run) => {
                 setGoalPickerOpen(false);

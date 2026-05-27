@@ -803,9 +803,53 @@ export function createGoalsTool(
         case "evidence_plan": {
           const run = await resolveRun(storageCwd, args.run_id);
           if (!run) return "Error: no active goal run found.";
-          const evidencePlanItemId = args.evidence_plan_item_id;
-          if (!evidencePlanItemId) return "Error: evidence_plan_item_id is required.";
           const evidencePlan = [...run.evidencePlan];
+          if (args.evidence_plan?.length) {
+            let added = 0;
+            let updatedCount = 0;
+            for (const item of args.evidence_plan) {
+              const itemId = item.id ?? randomUUID();
+              const nextItem = {
+                id: itemId,
+                label: item.label,
+                mechanism: asEvidenceMechanism(item.mechanism),
+                description: item.description,
+                status: item.status ?? "planned",
+                ...(item.command ? { command: item.command } : {}),
+                ...(item.path ? { path: item.path } : {}),
+                ...(item.instructions ? { instructions: item.instructions } : {}),
+                ...(item.evidence ? { evidence: item.evidence } : {}),
+              };
+              const index = evidencePlan.findIndex(
+                (existing) => existing.id === itemId || existing.id.startsWith(itemId),
+              );
+              if (index >= 0) {
+                evidencePlan[index] = nextItem;
+                updatedCount += 1;
+              } else {
+                evidencePlan.push(nextItem);
+                added += 1;
+              }
+            }
+            const evidencePlanRun: GoalRun = { ...run, evidencePlan };
+            const setupBlockers = setupBlockersForRun(evidencePlanRun);
+            const updated = await upsertGoalRun(storageCwd, {
+              ...evidencePlanRun,
+              status: statusAfterSetupCheck(evidencePlanRun, setupBlockers),
+              blockers: blockersAfterSetupCheck(evidencePlanRun, setupBlockers),
+            });
+            await appendGoalDecision(storageCwd, updated.id, {
+              kind: "evidence_plan",
+              reason: `Evidence-plan items upserted: ${added} added, ${updatedCount} updated.`,
+            });
+            if (args.evidence_plan.length === 1) {
+              const item = args.evidence_plan[0];
+              return `Evidence-plan item ${added === 1 ? "added" : "updated"} for "${updated.title}": "${item?.label ?? "Evidence"}".`;
+            }
+            return `Evidence-plan items upserted for "${updated.title}": ${added} added, ${updatedCount} updated.`;
+          }
+          const evidencePlanItemId = args.evidence_plan_item_id;
+          if (!evidencePlanItemId) return "Error: evidence_plan_item_id or evidence_plan is required.";
           const index = evidencePlan.findIndex(
             (item) => item.id === evidencePlanItemId || item.id.startsWith(evidencePlanItemId),
           );

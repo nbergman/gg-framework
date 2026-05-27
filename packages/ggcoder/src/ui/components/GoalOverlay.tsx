@@ -40,6 +40,7 @@ export interface GoalOverlayProps {
   onRunGoal: (run: GoalRun) => void;
   onVerifyGoal: (run: GoalRun) => void;
   onPauseGoal: (run: GoalRun) => void;
+  onDeleteGoal?: (run: GoalRun) => void;
   onRefineGoal?: (run: GoalRun, feedback: string) => void;
   agentRunning?: boolean;
   autoExpandNewest?: boolean;
@@ -735,6 +736,7 @@ export function GoalOverlay({
   onRunGoal,
   onVerifyGoal,
   onPauseGoal,
+  onDeleteGoal,
   onRefineGoal,
   agentRunning,
   autoExpandNewest,
@@ -885,6 +887,7 @@ export function GoalOverlay({
         return;
       }
       if (input === "y" && selectedRun) {
+        onDeleteGoal?.(selectedRun);
         setRuns((previousRuns) => previousRuns.filter((run) => run.id !== selectedRun.id));
         setExpandedRunId(null);
         setReviewSnapshot(null);

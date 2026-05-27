@@ -213,7 +213,7 @@ function isAgentSpacingKind(kind: CompletedItem["kind"]): boolean {
   ].includes(kind);
 }
 
-function isToolBoundaryKind(kind: CompletedItem["kind"]): boolean {
+function isLiveAssistantBoundaryKind(kind: CompletedItem["kind"]): boolean {
   return [
     "goal_progress",
     "tool_start",
@@ -222,6 +222,8 @@ function isToolBoundaryKind(kind: CompletedItem["kind"]): boolean {
     "server_tool_start",
     "server_tool_done",
     "subagent_group",
+    "plan_transition",
+    "goal_agent_transition",
   ].includes(kind);
 }
 
@@ -270,7 +272,7 @@ export function shouldTopSpaceAssistantAfterToolBoundary({
     return true;
   }
   const previousKind = previousLiveItem?.kind;
-  return previousKind !== undefined && isToolBoundaryKind(previousKind);
+  return previousKind !== undefined && isLiveAssistantBoundaryKind(previousKind);
 }
 
 export function shouldTopSpaceStreamingAssistant({

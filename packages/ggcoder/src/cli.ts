@@ -72,6 +72,7 @@ import { initLogger, log, closeLogger } from "./core/logger.js";
 import { setStreamDiagnostic } from "@kenkaiiii/gg-agent";
 import { setProviderDiagnostic } from "@kenkaiiii/gg-ai";
 import { buildSystemPrompt } from "./system-prompt.js";
+import { PROMPT_COMMANDS } from "./core/prompt-commands.js";
 import { createTools } from "./tools/index.js";
 import { shouldCompact, compact } from "./core/compaction/compactor.js";
 import {
@@ -685,7 +686,11 @@ async function runInkTUI(opts: {
         }
 
         const restoredMessages = getRestoredMessagesForDisplay(messages);
-        initialHistory = messagesToHistoryItems(restoredMessages);
+        const restoredDisplayItems = sessionManager.getDisplayItems(loaded.entries, loaded.header.leafId);
+        initialHistory =
+          restoredDisplayItems.length > 0
+            ? restoredDisplayItems
+            : messagesToHistoryItems(restoredMessages);
         initialHistory.push({
           kind: "info",
           text: formatRestoreInfoText(loadedMessages.length, restoredMessages.length),
@@ -1788,6 +1793,19 @@ function goalCompletionDetail(summary: string): string | undefined {
   return statusLine ?? changedLine ?? verificationLine ?? lines[0];
 }
 
+function restoredPromptCommandDisplayText(text: string): string | null {
+  for (const command of PROMPT_COMMANDS) {
+    if (text === command.prompt) return `/${command.name}`;
+    const prefix = `${command.prompt}\n\n## User Instructions\n\n`;
+    if (text.startsWith(prefix)) {
+      const args = text.slice(prefix.length).split(/^## Goal References \(MANDATORY\)\s*$/m)[0]?.trim() ?? "";
+      return args ? `/${command.name} ${args}` : `/${command.name}`;
+    }
+  }
+  if (text.startsWith("## Original Goal Objective\n\n")) return null;
+  return null;
+}
+
 function goalProgressFromSyntheticText(text: string): GoalProgressDraft | null {
   const eventInfo = parseGoalSyntheticEvent(text.trimStart());
   if (!eventInfo) return null;
@@ -1897,7 +1915,7 @@ export function messagesToHistoryItems(msgs: Message[]): CompletedItem[] {
       if (goalProgress) {
         pushGoalProgress(goalProgress);
       } else {
-        items.push({ kind: "user", text, id: `restore-${id++}` });
+        items.push({ kind: "user", text: restoredPromptCommandDisplayText(text) ?? text, id: `restore-${id++}` });
       }
     } else if (msg.role === "assistant") {
       const content = msg.content;

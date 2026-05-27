@@ -17,9 +17,12 @@ import {
 } from "./goal-progress.js";
 import { nextGoalModeAfterAgentDone } from "./layout-decisions.js";
 import {
+  buildGoalDirtyWorktreePauseRun,
   buildGoalDirtyWorktreeUserPrompt,
+  buildGoalUserPauseRun,
   goalDirtyWorktreeInfoText,
   goalRunNeedsExplicitContinuationAfterWorker,
+  shouldKeepGoalRunTrackedAfterDecision,
   shouldRunGoalTaskInMainCheckout,
 } from "./App.js";
 
@@ -165,7 +168,7 @@ describe("/goal UI orchestration lifecycle", () => {
     expect(shouldRunGoalTaskInMainCheckout("Implement isolated feature")).toBe(false);
   });
 
-  it("turns dirty worktree launch failures into a user choice prompt", () => {
+  it("turns dirty worktree launch failures into a durable human-choice pause", () => {
     const error = new GoalWorktreeDirtyError(" M packages/ggcoder/src/ui/App.tsx\n?? scratch.md");
 
     expect(goalDirtyWorktreeInfoText()).toContain("working tree has uncommitted changes");
@@ -175,7 +178,32 @@ describe("/goal UI orchestration lifecycle", () => {
     expect(prompt).toContain("commit the current changes");
     expect(prompt).toContain("stash them");
     expect(prompt).toContain("pause the Goal");
+    expect(prompt).toContain("If the user chooses commit");
+    expect(prompt).toContain("stage only the listed dirty files the user approved");
+    expect(prompt).toContain("resume/continue the Goal only after the working tree is clean");
     expect(prompt).toContain("Do not run git commit, git stash, or discard changes");
+
+    const pausedRun = buildGoalDirtyWorktreePauseRun(
+      goalRun({
+        activeWorkerId: "worker-stale",
+        continueRequestedAt: "2024-01-01T00:00:00.000Z",
+        blockers: ["existing blocker"],
+        tasks: [task({ workerId: "worker-stale", status: "pending" })],
+      }),
+      error,
+    );
+    expect(pausedRun.status).toBe("paused");
+    expect(pausedRun.activeWorkerId).toBeUndefined();
+    expect(pausedRun.continueRequestedAt).toBeUndefined();
+    expect(pausedRun.blockers).toEqual([
+      "existing blocker",
+      "Goal worker startup is awaiting a human choice because the working tree has uncommitted changes: M packages/ggcoder/src/ui/App.tsx; ?? scratch.md. Commit the current changes, stash them, or keep the Goal paused before starting isolated Goal workers.",
+    ]);
+    expect(decideGoalNextAction(pausedRun)).toMatchObject({
+      kind: "terminal",
+      status: "paused",
+    });
+    expect(shouldKeepGoalRunTrackedAfterDecision(decideGoalNextAction(pausedRun))).toBe(false);
   });
 
   it("truncates long Goal progress text before it wraps across the TUI", () => {
@@ -235,6 +263,25 @@ describe("/goal UI orchestration lifecycle", () => {
     });
   });
 
+  it("builds a user pause state that stops auto-continuation", () => {
+    const pausedRun = buildGoalUserPauseRun(
+      goalRun({
+        status: "running",
+        activeWorkerId: "worker-live",
+        continueRequestedAt: "2024-01-01T00:00:00.000Z",
+        tasks: [task({ status: "running", workerId: "worker-live" })],
+      }),
+    );
+
+    expect(pausedRun).toMatchObject({ status: "paused" });
+    expect(pausedRun.activeWorkerId).toBeUndefined();
+    expect(pausedRun.continueRequestedAt).toBeUndefined();
+    expect(pausedRun.blockers).toContain(
+      "Goal paused by user from the mini TUI; auto-continuation is stopped until resumed.",
+    );
+    expect(decideGoalNextAction(pausedRun)).toMatchObject({ kind: "terminal", status: "paused" });
+  });
+
   it("requires explicit continuation before chaining another Goal worker after completion", () => {
     const completedRun = goalRun({
       status: "ready",
@@ -255,6 +302,43 @@ describe("/goal UI orchestration lifecycle", () => {
         prerequisites: [{ id: "api", label: "API key", status: "missing" }],
       }),
     ).toBe(false);
+  });
+
+  it("tracks Goal runs only while concrete continuation work remains", () => {
+    const passed = applyCompletionAudit(
+      applyVerifierResult(
+        goalRun({
+          tasks: [task({ status: "done", attempts: 1 })],
+          verifier: { description: "Full check", command: "pnpm test" },
+          evidencePlan: [
+            {
+              id: "proof-log",
+              label: "Verifier log",
+              mechanism: "command",
+              description: "Verifier output log",
+              status: "ready",
+              path: ".goal-evidence/verifier.log",
+            },
+          ],
+        }),
+        "pass",
+      ),
+    );
+    expect(shouldKeepGoalRunTrackedAfterDecision(decideGoalNextAction(passed))).toBe(false);
+
+    const dependencyWait = goalRun({
+      tasks: [task({ id: "dependent", dependsOn: ["missing"] })],
+    });
+    expect(shouldKeepGoalRunTrackedAfterDecision(decideGoalNextAction(dependencyWait))).toBe(false);
+
+    const activeWorker = applyStartWorker(goalRun({ tasks: [task()] }));
+    expect(shouldKeepGoalRunTrackedAfterDecision(decideGoalNextAction(activeWorker))).toBe(true);
+
+    const readyVerifier = goalRun({
+      tasks: [task({ status: "done", attempts: 1 })],
+      verifier: { description: "Full check", command: "pnpm test" },
+    });
+    expect(shouldKeepGoalRunTrackedAfterDecision(decideGoalNextAction(readyVerifier))).toBe(true);
   });
 
   it("keeps coordinator mode only while Goal continuation work remains", () => {
