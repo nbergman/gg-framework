@@ -100,9 +100,11 @@ export async function saveBossTelegramConfig(config: BossTelegramConfig): Promis
  */
 function formatItemForTelegram(item: HistoryItem): string | null {
   switch (item.kind) {
+    case "banner":
     case "user":
     case "tool_start":
     case "tool_done":
+    case "tool_group":
     case "compacting":
     case "compacted":
     case "stopped":

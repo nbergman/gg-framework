@@ -13,7 +13,7 @@ import { projectColor } from "./colors.js";
 import { COLORS } from "./branding.js";
 import type { GGBoss } from "./orchestrator.js";
 import { VERSION } from "./branding.js";
-import { BossStreamingTurnView, BossTranscriptRow } from "./boss-transcript-rows.js";
+import { BossStreamingTurnView } from "./boss-transcript-rows.js";
 import { createBossTerminalHistoryPrinter } from "./boss-terminal-history.js";
 import type { BossDisplayItem } from "./boss-ui-items.js";
 import { getCurrentStation, playRadio, stopRadio, RADIO_STATIONS } from "./radio.js";
@@ -32,7 +32,7 @@ interface BossAppProps {
    * reliable way to reset log-update's internal cursor/line-count tracking
    * without the drift that manifests as "input pushed upward" after /clear.
    */
-  resetUI?: () => void;
+  resetUI?: (reason?: BossResetUiReason) => void;
 }
 
 export function BossApp(props: BossAppProps): React.ReactElement {
@@ -52,7 +52,7 @@ function BossAppInner({ boss, resetUI, terminalHistoryPrinter }: BossAppProps): 
   const state = useBossState();
   const theme = useTheme();
   const { exit } = useApp();
-  const { stdout } = useStdout();
+  const { stdout, write: writeStdout } = useStdout();
   const { columns, rows } = useTerminalSize();
   const runStartRef = useRef<number | null>(null);
   runStartRef.current = state.runStartMs;
@@ -153,9 +153,9 @@ function BossAppInner({ boss, resetUI, terminalHistoryPrinter }: BossAppProps): 
     const printer = terminalHistoryPrinterRef.current;
     const pending = state.history.filter((item) => !printedHistoryIdsRef.current.has(item.id));
     if (pending.length === 0) return;
-    printer.print(pending, terminalHistoryContext, { write: (data) => stdout?.write(data) });
+    printer.print(pending, terminalHistoryContext, { write: writeStdout });
     for (const item of pending) printedHistoryIdsRef.current.add(item.id);
-  }, [columns, state.bossModel, state.bossProvider, state.history, stdout, theme]);
+  }, [columns, state.bossModel, state.bossProvider, state.history, theme, writeStdout]);
 
   /**
    * Opening or closing an overlay shrinks/grows the live area dramatically
@@ -167,18 +167,34 @@ function BossAppInner({ boss, resetUI, terminalHistoryPrinter }: BossAppProps): 
    * unmounts the Ink instance and renders a fresh one. The overlay
    * selection survives via bossStore.overlay.
    */
+  const overlayResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (overlayResetTimerRef.current) clearTimeout(overlayResetTimerRef.current);
+    };
+  }, []);
+
+  const scheduleOverlayReset = useCallback((): void => {
+    if (!resetUI) return;
+    if (overlayResetTimerRef.current) clearTimeout(overlayResetTimerRef.current);
+    overlayResetTimerRef.current = setTimeout(() => {
+      overlayResetTimerRef.current = null;
+      resetUI();
+    }, 0);
+  }, [resetUI]);
+
   const openOverlay = useCallback(
     (next: BossOverlay): void => {
       bossStore.setOverlay(next);
-      if (resetUI) resetUI();
+      scheduleOverlayReset();
     },
-    [resetUI],
+    [scheduleOverlayReset],
   );
 
   const closeOverlay = useCallback((): void => {
     bossStore.setOverlay(null);
-    if (resetUI) resetUI();
-  }, [resetUI]);
+    scheduleOverlayReset();
+  }, [scheduleOverlayReset]);
   void stdout;
 
   // ggcoder's double-press pattern: 800ms window. First press shows
@@ -243,7 +259,7 @@ function BossAppInner({ boss, resetUI, terminalHistoryPrinter }: BossAppProps): 
         // messages look cleared" symptom. Empty the store first so the new
         // instance mounts against an empty history.
         bossStore.clearHistory();
-        resetUI?.();
+        resetUI?.("session-clear");
         await boss.resetConversation();
         bossStore.appendInfo("Session cleared.", "info");
         return true;
@@ -275,11 +291,16 @@ function BossAppInner({ boss, resetUI, terminalHistoryPrinter }: BossAppProps): 
     }
     const provider = value.slice(0, colon) as Provider;
     const model = value.slice(colon + 1);
-    if (overlay === "model-boss") {
-      void boss.switchBossModel(provider, model);
-    } else if (overlay === "model-workers") {
-      void boss.switchWorkerModel(provider, model);
-    }
+    const switchPromise =
+      overlay === "model-boss"
+        ? boss.switchBossModel(provider, model)
+        : overlay === "model-workers"
+          ? boss.switchWorkerModel(provider, model)
+          : Promise.resolve();
+    void switchPromise.catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      bossStore.appendInfo(`Model switch failed: ${message}`, "error");
+    });
     closeOverlay();
   };
 
@@ -292,10 +313,10 @@ function BossAppInner({ boss, resetUI, terminalHistoryPrinter }: BossAppProps): 
     }
     const userItem = bossStore.createUserItem(trimmed);
     terminalHistoryPrinterRef.current.print([userItem], terminalHistoryContext, {
-      write: (data) => stdout?.write(data),
+      write: writeStdout,
     });
     printedHistoryIdsRef.current.add(userItem.id);
-    bossStore.commitLiveItem(userItem);
+    bossStore.queueSubmittedUserItem(userItem);
     setLastUserMessage(trimmed);
     // Inject the scope pill into the message the boss actually sees, so the
     // user doesn't have to write "for the yaatuber project, …" every prompt.
@@ -307,6 +328,8 @@ function BossAppInner({ boss, resetUI, terminalHistoryPrinter }: BossAppProps): 
   const stallStatusVisible = false;
   const doneStatus = null;
   const statusSlotVisible = activityVisible || stallStatusVisible || !!doneStatus;
+  const controlsRows = 7 + (statusSlotVisible ? 1 : 0) + (state.exitPending ? 0 : 1);
+  const availableLiveRows = Math.max(1, rows - controlsRows);
 
   // Live area = streaming + activity + input (≥3 lines, bordered) + footer +
   // workerbar. Below ~14 rows we can't fit all of it without log-update
@@ -328,19 +351,19 @@ function BossAppInner({ boss, resetUI, terminalHistoryPrinter }: BossAppProps): 
     );
   }
 
-  const bannerPane = <BossTranscriptRow row={{ kind: "banner", id: "banner" }} />;
-  const historyPane = null;
+  const lastPendingHistoryItem = state.pendingFlush[state.pendingFlush.length - 1] as
+    | BossDisplayItem
+    | undefined;
+  const lastHistoryItem = state.history[state.history.length - 1] as BossDisplayItem | undefined;
   const livePane = (
-    <>
-      {state.streaming && (
-        <BossStreamingTurnView
-          turn={state.streaming}
-          isRunning={state.phase === "working"}
-          liveItems={liveItems}
-          lastHistoryItem={state.history[state.history.length - 1] as BossDisplayItem | undefined}
-        />
-      )}
-    </>
+    <BossStreamingTurnView
+      turn={state.streaming}
+      isRunning={state.phase === "working"}
+      liveItems={liveItems}
+      lastPendingHistoryItem={lastPendingHistoryItem}
+      lastHistoryItem={lastHistoryItem}
+      availableTerminalHeight={availableLiveRows}
+    />
   );
 
   return (
@@ -349,8 +372,6 @@ function BossAppInner({ boss, resetUI, terminalHistoryPrinter }: BossAppProps): 
       columns={columns}
       state={state}
       overlay={overlay}
-      bannerPane={bannerPane}
-      historyPane={historyPane}
       livePane={livePane}
       theme={theme}
       statusSlotVisible={statusSlotVisible}
@@ -475,7 +496,7 @@ const DISABLE_FOCUS_REPORTING = "\x1b[?1004l";
 const SCREEN_CLEAR = DISABLE_MODIFY_OTHER_KEYS + "\x1b[2J\x1b[3J\x1b[H";
 const VIEWPORT_CLEAR = DISABLE_MODIFY_OTHER_KEYS + "\x1b[2J\x1b[H";
 
-type BossResetUiReason = "viewport" | "resize-redraw";
+type BossResetUiReason = "viewport" | "resize-redraw" | "session-clear";
 
 export function renderBossApp(opts: RenderBossAppOptions): {
   waitUntilExit: () => Promise<void>;
@@ -524,9 +545,14 @@ export function renderBossApp(opts: RenderBossAppOptions): {
           cwd: process.cwd(),
         });
       }
+    } else if (reason === "session-clear") {
+      // /clear starts a fresh durable transcript. Clear the terminal-history
+      // dedupe so the banner seeded in bossStore.history prints on the new mount.
+      terminalHistoryPrinter.clear();
+      process.stdout.write(SCREEN_CLEAR);
     } else {
-      // Overlay and /clear remounts preserve real scrollback; just drop stale
-      // live frames and reset xterm modifyOtherKeys before Ink re-enables input.
+      // Overlay remounts preserve real scrollback; just drop stale live frames
+      // and reset xterm modifyOtherKeys before Ink re-enables input.
       process.stdout.write(VIEWPORT_CLEAR);
     }
 
@@ -565,10 +591,16 @@ export function renderBossApp(opts: RenderBossAppOptions): {
   // double-fire. State outside React (GGBoss class, bossStore singleton,
   // overlay) survives.
   let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+  let resizeListenerEnabled = false;
+  const enableResizeListener = setTimeout(() => {
+    resizeListenerEnabled = true;
+  }, 1000);
   const onTerminalResize = (): void => {
+    if (!resizeListenerEnabled) return;
     if (resizeTimer) clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
       resizeTimer = null;
+      if (getBossState().phase === "working") return;
       resetUI("resize-redraw");
     }, 250);
   };
@@ -586,6 +618,7 @@ export function renderBossApp(opts: RenderBossAppOptions): {
         if (!current) {
           process.stdout.off("resize", onTerminalResize);
           process.off("exit", onProcessExit);
+          clearTimeout(enableResizeListener);
           if (resizeTimer) clearTimeout(resizeTimer);
           onProcessExit();
           return;
@@ -598,6 +631,7 @@ export function renderBossApp(opts: RenderBossAppOptions): {
           ref.instance = null;
           process.stdout.off("resize", onTerminalResize);
           process.off("exit", onProcessExit);
+          clearTimeout(enableResizeListener);
           if (resizeTimer) clearTimeout(resizeTimer);
           onProcessExit();
           return;
@@ -607,6 +641,7 @@ export function renderBossApp(opts: RenderBossAppOptions): {
     unmount: () => {
       process.stdout.off("resize", onTerminalResize);
       process.off("exit", onProcessExit);
+      clearTimeout(enableResizeListener);
       if (resizeTimer) clearTimeout(resizeTimer);
       onProcessExit();
       ref.instance?.unmount();

@@ -51,11 +51,20 @@ const COMPACT_TRANSCRIPT_BOUNDARIES = new Set<string>([
 export function shouldSeparateTranscriptItems({
   previousKind,
   currentKind,
+  spacingKinds,
+  compactBoundaries,
 }: {
   previousKind?: string;
   currentKind: string;
+  spacingKinds?: ReadonlySet<string>;
+  compactBoundaries?: ReadonlySet<string>;
 }): boolean {
-  return shouldSeparateTranscriptItemKinds({ previousKind, currentKind });
+  return shouldSeparateTranscriptItemKinds({
+    previousKind,
+    currentKind,
+    spacingKinds,
+    compactBoundaries,
+  });
 }
 
 export function shouldSeparateTranscriptItemKinds({
@@ -87,15 +96,24 @@ export function shouldTopSpaceAfterPrintedTranscriptBoundary({
   previousLiveItem,
   lastPendingHistoryItem,
   lastHistoryItem,
+  spacingKinds,
+  compactBoundaries,
 }: {
   currentKind: string;
   previousLiveItem?: TranscriptSpacingItem;
   lastPendingHistoryItem?: TranscriptSpacingItem;
   lastHistoryItem?: TranscriptSpacingItem;
+  spacingKinds?: ReadonlySet<string>;
+  compactBoundaries?: ReadonlySet<string>;
 }): boolean {
   if (previousLiveItem !== undefined) return false;
   const previousKind = lastPendingHistoryItem?.kind ?? lastHistoryItem?.kind;
-  return shouldSeparateTranscriptItems({ previousKind, currentKind });
+  return shouldSeparateTranscriptItems({
+    previousKind,
+    currentKind,
+    spacingKinds,
+    compactBoundaries,
+  });
 }
 
 export function shouldTopSpaceAssistantAfterToolBoundary({
@@ -103,16 +121,25 @@ export function shouldTopSpaceAssistantAfterToolBoundary({
   previousLiveItem,
   lastPendingHistoryItem,
   lastHistoryItem,
+  spacingKinds,
+  compactBoundaries,
 }: {
   text: string;
   previousLiveItem?: TranscriptSpacingItem;
   lastPendingHistoryItem?: TranscriptSpacingItem;
   lastHistoryItem?: TranscriptSpacingItem;
+  spacingKinds?: ReadonlySet<string>;
+  compactBoundaries?: ReadonlySet<string>;
 }): boolean {
   if (text.trim().length === 0) return false;
   const previousKind =
     previousLiveItem?.kind ?? lastPendingHistoryItem?.kind ?? lastHistoryItem?.kind;
-  return shouldSeparateTranscriptItems({ previousKind, currentKind: "assistant" });
+  return shouldSeparateTranscriptItems({
+    previousKind,
+    currentKind: "assistant",
+    spacingKinds,
+    compactBoundaries,
+  });
 }
 
 export function getTranscriptItemMarginTop({
@@ -120,11 +147,15 @@ export function getTranscriptItemMarginTop({
   previousLiveItem,
   lastPendingHistoryItem,
   lastHistoryItem,
+  spacingKinds,
+  compactBoundaries,
 }: {
   item: TranscriptSpacingItem;
   previousLiveItem?: TranscriptSpacingItem;
   lastPendingHistoryItem?: TranscriptSpacingItem;
   lastHistoryItem?: TranscriptSpacingItem;
+  spacingKinds?: ReadonlySet<string>;
+  compactBoundaries?: ReadonlySet<string>;
 }): number {
   const previousKind =
     previousLiveItem?.kind ?? lastPendingHistoryItem?.kind ?? lastHistoryItem?.kind;
@@ -134,12 +165,21 @@ export function getTranscriptItemMarginTop({
       previousLiveItem,
       lastPendingHistoryItem,
       lastHistoryItem,
+      spacingKinds,
+      compactBoundaries,
     })
       ? 1
       : 0;
   }
   if (item.kind === "plan_transition") return 0;
-  return shouldSeparateTranscriptItems({ previousKind, currentKind: item.kind }) ? 1 : 0;
+  return shouldSeparateTranscriptItems({
+    previousKind,
+    currentKind: item.kind,
+    spacingKinds,
+    compactBoundaries,
+  })
+    ? 1
+    : 0;
 }
 
 export function shouldTopSpaceStreamingAssistant({
@@ -147,16 +187,22 @@ export function shouldTopSpaceStreamingAssistant({
   lastLiveItem,
   lastPendingHistoryItem,
   lastHistoryItem,
+  spacingKinds,
+  compactBoundaries,
 }: {
   visibleStreamingText: string;
   lastLiveItem?: TranscriptSpacingItem;
   lastPendingHistoryItem?: TranscriptSpacingItem;
   lastHistoryItem?: TranscriptSpacingItem;
+  spacingKinds?: ReadonlySet<string>;
+  compactBoundaries?: ReadonlySet<string>;
 }): boolean {
   return shouldTopSpaceAssistantAfterToolBoundary({
     text: visibleStreamingText,
     previousLiveItem: lastLiveItem,
     lastPendingHistoryItem,
     lastHistoryItem,
+    spacingKinds,
+    compactBoundaries,
   });
 }

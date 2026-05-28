@@ -40,6 +40,33 @@ export interface BossToolDoneItem {
   details?: unknown;
 }
 
+/**
+ * A single tool within a coalesced group. Mirrors ggcoder's ToolGroupTool so
+ * the shared `<ToolGroupExecution>` component and `buildToolGroupSummary` can
+ * consume boss tool groups directly.
+ */
+export interface BossToolGroupTool {
+  toolCallId: string;
+  name: string;
+  args: Record<string, unknown>;
+  status: "running" | "done";
+  animateUntil?: number;
+  result?: string;
+  isError?: boolean;
+}
+
+/**
+ * Several consecutive same-name read-only tool calls collapsed into one row —
+ * e.g. "Checked 4 workers: api, web, +2". Built in the boss store the same way
+ * ggcoder's App coalesces read/grep/ls, then rendered with the shared ggcoder
+ * `<ToolGroupExecution>` component (live) and `buildToolGroupSummary` (scrollback).
+ */
+export interface BossToolGroupItem {
+  kind: "tool_group";
+  id: string;
+  tools: BossToolGroupTool[];
+}
+
 export interface BossWorkerEventItem {
   kind: "worker_event";
   id: string;
@@ -105,10 +132,12 @@ export interface BossBannerItem {
 }
 
 export type BossDisplayItem =
+  | BossBannerItem
   | BossUserItem
   | BossAssistantItem
   | BossToolStartItem
   | BossToolDoneItem
+  | BossToolGroupItem
   | BossWorkerEventItem
   | BossWorkerErrorItem
   | BossInfoItem
@@ -118,4 +147,4 @@ export type BossDisplayItem =
   | BossCompactedItem
   | BossStoppedItem;
 
-export type BossTranscriptItem = BossBannerItem | BossDisplayItem;
+export type BossTranscriptItem = BossDisplayItem;

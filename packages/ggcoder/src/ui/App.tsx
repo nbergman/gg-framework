@@ -1548,12 +1548,18 @@ export function App(props: AppProps) {
             setDoneStatus({ durationMs, toolsUsed, verb: pickDurationVerb(toolsUsed) });
             playNotificationSound();
           }
-          // Finalize rows now; the sink writes them outside Ink and then the
-          // live area is cleared, so there is no Static/live repaint race.
+          // Finalize rows. Do NOT clear the live area here — keep the items
+          // mounted and let the flush drain effect write them to scrollback
+          // FIRST and only then remove them from the live area. Clearing live
+          // up front (return []) erases the rows a frame before the sink writes
+          // them back into scrollback, which makes each finalized item blink
+          // out and the TUI jump as the agent finishes. Write-then-clear keeps
+          // every row continuously on screen (live → scrollback), matching how
+          // Ink's <Static> moves a finalized item in a single atomic frame.
           if (doneDecision.flushLiveItems) {
             setLiveItems((prev) => {
               if (prev.length > 0) queueFlush(prev);
-              return [];
+              return prev;
             });
           }
 
@@ -1696,9 +1702,12 @@ export function App(props: AppProps) {
             );
             void setGoalModeAndPrompt("coordinator");
             const eventInfo = parseGoalSyntheticEvent(displayText);
+            // Write-then-clear: keep the rows mounted and let the flush drain
+            // print them to scrollback before removing them, so they don't blink
+            // out of the live area a frame before reappearing in scrollback.
             setLiveItems((prev) => {
               if (prev.length > 0) queueFlush(prev);
-              return [];
+              return prev;
             });
             setDoneStatus(null);
             appendGoalProgress({
@@ -2521,6 +2530,10 @@ export function App(props: AppProps) {
     lastPendingHistoryItem,
     lastHistoryItem,
   });
+  // When earlier paragraphs of THIS response were already flushed to scrollback
+  // mid-stream, the live remainder is the next paragraph — re-insert the blank
+  // line that separated them so the live tail lines up with the flushed history.
+  const streamingContinuesFlushed = streamedAssistantFlushRef.current.flushedChars > 0;
   const visibleQueuedCount = liveItems.filter((item) => item.kind === "queued").length;
   const hiddenQueuedCount = Math.max(0, agentLoop.queuedCount - visibleQueuedCount);
   const shouldTopSpaceQueueIndicator =
@@ -2835,8 +2848,8 @@ export function App(props: AppProps) {
           reserveStreamingSpacing={shouldReserveStreamingSpacing}
           renderMarkdown={renderMarkdown}
           measuredLiveAreaRows={measuredLiveAreaRows}
-          assistantMarginTop={shouldTopSpaceStreamingText ? 1 : 0}
-          streamingContinuation={streamedAssistantFlushRef.current.flushedChars > 0}
+          assistantMarginTop={shouldTopSpaceStreamingText || streamingContinuesFlushed ? 1 : 0}
+          streamingContinuation={streamingContinuesFlushed}
           controlsRef={mainControlsRef}
           hiddenQueuedCount={hiddenQueuedCount}
           queueIndicatorMarginTop={shouldTopSpaceQueueIndicator ? 2 : 1}

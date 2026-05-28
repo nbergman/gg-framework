@@ -1,13 +1,8 @@
 import React from "react";
 import type { DOMElement } from "ink";
-import {
-  ChatControls,
-  ChatInputStack,
-  ChatLayout,
-  InputArea,
-  ModelSelector,
-} from "@kenkaiiii/ggcoder/ui";
+import { ChatControls, ChatInputStack, ChatLayout, InputArea } from "@kenkaiiii/ggcoder/ui";
 import { BossFooter } from "./boss-footer.js";
+import { BossModelSelector } from "./boss-model-selector.js";
 import { BossTasksOverlay } from "./boss-tasks-overlay.js";
 import { BossWorkerStatusRow } from "./boss-worker-status-row.js";
 import { RadioPicker } from "./radio-picker.js";
@@ -23,8 +18,6 @@ interface BossChatScreenProps {
   state: BossUiState;
   overlay: BossOverlay | null;
   controlsRef?: (node: DOMElement | null) => void;
-  bannerPane: React.ReactNode;
-  historyPane: React.ReactNode;
   livePane: React.ReactNode;
   theme: ReturnType<typeof useTheme>;
   statusSlotVisible: boolean;
@@ -65,8 +58,6 @@ export function BossChatScreen({
   state,
   overlay,
   controlsRef = () => {},
-  bannerPane,
-  historyPane,
   livePane,
   theme,
   statusSlotVisible,
@@ -102,7 +93,6 @@ export function BossChatScreen({
   if (overlay === "tasks") {
     return (
       <ChatLayout columns={columns}>
-        {bannerPane}
         <BossTasksOverlay boss={boss} workers={workers} onClose={onCloseOverlay} />
       </ChatLayout>
     );
@@ -110,8 +100,6 @@ export function BossChatScreen({
 
   return (
     <ChatLayout columns={columns}>
-      {bannerPane}
-      {historyPane}
       {livePane}
 
       <ChatControls controlsRef={controlsRef}>
@@ -154,10 +142,9 @@ export function BossChatScreen({
         />
 
         {overlay === "model-boss" || overlay === "model-workers" ? (
-          <ModelSelector
+          <BossModelSelector
             onSelect={onModelSelect}
             onCancel={onCloseOverlay}
-            loggedInProviders={state.loggedInProviders}
             currentModel={overlay === "model-boss" ? state.bossModel : state.workerModel}
             currentProvider={overlay === "model-boss" ? state.bossProvider : state.workerProvider}
           />

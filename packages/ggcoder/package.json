@@ -57,6 +57,14 @@
       "import": "./dist/ui/terminal-history.js",
       "types": "./dist/ui/terminal-history.d.ts"
     },
+    "./ui/tool-group-summary": {
+      "import": "./dist/ui/tool-group-summary.js",
+      "types": "./dist/ui/tool-group-summary.d.ts"
+    },
+    "./ui/transcript/tool-presentation": {
+      "import": "./dist/ui/transcript/tool-presentation.js",
+      "types": "./dist/ui/transcript/tool-presentation.d.ts"
+    },
     "./ui/terminal-history-format": {
       "import": "./dist/ui/terminal-history-format.js",
       "types": "./dist/ui/terminal-history-format.d.ts"

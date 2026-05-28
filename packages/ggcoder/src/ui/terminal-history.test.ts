@@ -441,7 +441,7 @@ describe("terminal history", () => {
     expect(stripAnsi(output)).not.toMatch(/▀+\n\n [⏺●] Fixed\./);
   });
 
-  it("does not insert blank separators between assistant continuation chunks", () => {
+  it("reinserts the paragraph break before an assistant continuation chunk", () => {
     let output = "";
     const stream = {
       write(chunk: string) {
@@ -459,8 +459,80 @@ describe("terminal history", () => {
       context,
     );
 
-    expect(stripAnsi(output)).toContain(" ⏺ First chunk.\n   Second chunk.");
-    expect(stripAnsi(output)).not.toContain(" ⏺ First chunk.\n\n   Second chunk.");
+    // A continuation chunk is the next paragraph of a progressively-flushed
+    // response, so the blank line that separated the paragraphs is restored —
+    // this keeps reassembled scrollback identical to the whole response.
+    expect(stripAnsi(output)).toContain(" ⏺ First chunk.\n\n   Second chunk.");
+  });
+
+  it("adds a blank separator between assistant and tool rows", () => {
+    let output = "";
+    const stream = {
+      write(chunk: string) {
+        output += chunk;
+        return true;
+      },
+    } as NodeJS.WriteStream;
+    const printer = createTerminalHistoryPrinter({ stream });
+
+    printer.print(
+      [
+        { kind: "assistant", text: "I’ll inspect the files.", id: "assistant-1" },
+        {
+          kind: "tool_group",
+          id: "tool-group-1",
+          tools: [
+            {
+              toolCallId: "read-1",
+              name: "read",
+              args: { file_path: "src/a.ts" },
+              status: "done",
+              result: "ok",
+            },
+          ],
+        },
+      ],
+      context,
+    );
+
+    expect(stripAnsi(output)).toMatch(new RegExp("inspect the files\\.\\n\\n [⏺●] Read"));
+  });
+
+  it("adds blank separators between consecutive tool rows", () => {
+    let output = "";
+    const stream = {
+      write(chunk: string) {
+        output += chunk;
+        return true;
+      },
+    } as NodeJS.WriteStream;
+    const printer = createTerminalHistoryPrinter({ stream });
+
+    printer.print(
+      [
+        {
+          kind: "tool_done",
+          id: "tool-1",
+          name: "read",
+          args: { file_path: "src/a.ts" },
+          result: "ok",
+          isError: false,
+          durationMs: 1,
+        },
+        {
+          kind: "tool_done",
+          id: "tool-2",
+          name: "grep",
+          args: { pattern: "needle" },
+          result: "src/a.ts:1:needle\n1 match found",
+          isError: false,
+          durationMs: 1,
+        },
+      ],
+      context,
+    );
+
+    expect(stripAnsi(output)).toMatch(new RegExp("Read src/a\\.ts\\n\\n [⏺●] Searched"));
   });
 
   it("does not add a blank separator above the next user row after an assistant", () => {

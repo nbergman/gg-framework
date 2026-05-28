@@ -131,14 +131,24 @@ export function createTerminalHistoryPrinter({
         if (!options?.force && printed.has(item.id)) continue;
         const output = serializeCompletedItemToTerminalHistory(item, context);
         const endsWithBlankLine = item.kind === "banner";
+        // A continuation assistant chunk is the next paragraph of a response
+        // whose earlier paragraphs were already flushed mid-stream. Re-insert
+        // the blank line that separated them so the reassembled scrollback
+        // matches the whole response (assistant→assistant is otherwise compact).
+        const isContinuationParagraph =
+          item.kind === "assistant" &&
+          item.continuation === true &&
+          previousPrintedKind === "assistant";
         const formatted = formatHistoryWrite(output, {
           leadingSeparator:
             item.kind === "plan_transition"
               ? false
-              : shouldSeparateTranscriptItems({
-                  previousKind: previousPrintedKind ?? undefined,
-                  currentKind: item.kind,
-                }),
+              : isContinuationParagraph
+                ? true
+                : shouldSeparateTranscriptItems({
+                    previousKind: previousPrintedKind ?? undefined,
+                    currentKind: item.kind,
+                  }),
           trailingBlankLine: endsWithBlankLine,
           trailingNewlines: item.kind === "user" ? 1 : undefined,
         });

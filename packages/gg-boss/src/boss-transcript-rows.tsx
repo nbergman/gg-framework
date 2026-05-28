@@ -4,9 +4,10 @@ import {
   AssistantMessage,
   CompactionDone,
   CompactionSpinner,
+  ChatLivePane,
   MessageResponse,
-  StreamingArea,
   ToolExecution,
+  ToolGroupExecution,
   ToolUseLoader,
   UserMessage,
 } from "@kenkaiiii/ggcoder/ui";
@@ -18,6 +19,7 @@ import {
 import { useTerminalSize } from "@kenkaiiii/ggcoder/ui/hooks/terminal-size";
 import { useTheme } from "@kenkaiiii/ggcoder/ui/theme";
 import { BossBanner } from "./banner.js";
+import { BOSS_SPACING_KINDS, BOSS_COMPACT_BOUNDARIES } from "./boss-spacing.js";
 import type {
   AssistantItem,
   HistoryItem,
@@ -25,8 +27,9 @@ import type {
   WorkerEventItem,
   WorkerErrorItem,
 } from "./boss-store.js";
-import type { BossToolDoneItem } from "./boss-ui-items.js";
+import type { BossToolDoneItem, BossToolGroupItem } from "./boss-ui-items.js";
 import { bossToolFormatters } from "./tool-formatters.js";
+import { bossToolGroupRenderers } from "./boss-tool-group-summary.js";
 import { projectColor } from "./colors.js";
 import { COLORS } from "./branding.js";
 
@@ -37,21 +40,10 @@ interface BannerRow {
 
 export type BossTranscriptRowItem = BannerRow | HistoryItem;
 export type BossDisplayTranscriptRowItem = HistoryItem;
-
-const BOSS_TRANSCRIPT_SPACING_KINDS = new Set<string>([
-  "user",
-  "assistant",
-  "tool_start",
-  "tool_done",
-  "worker_event",
-  "worker_error",
-  "task_dispatch",
-  "info",
-  "update_notice",
-  "compacting",
-  "compacted",
-  "stopped",
-]);
+type BossChatLivePaneItem = Extract<
+  HistoryItem,
+  { kind: "user" | "tool_start" | "tool_done" | "tool_group" | "compacting" | "compacted" }
+>;
 
 function getBossTranscriptMarginTop({
   row,
@@ -61,10 +53,12 @@ function getBossTranscriptMarginTop({
   previousRow?: BossTranscriptRowItem;
 }): number {
   if (row.kind === "banner" || previousRow?.kind === "banner") return 0;
-  if (!BOSS_TRANSCRIPT_SPACING_KINDS.has(row.kind)) return 0;
+  if (!BOSS_SPACING_KINDS.has(row.kind)) return 0;
   return getTranscriptItemMarginTop({
     item: row,
     previousLiveItem: previousRow,
+    spacingKinds: BOSS_SPACING_KINDS,
+    compactBoundaries: BOSS_COMPACT_BOUNDARIES,
   });
 }
 
@@ -91,6 +85,7 @@ export function BossTranscriptRow({
   if (row.kind === "assistant") return renderWithSpacing(<AssistantRow item={row} />);
   if (row.kind === "tool_start") return renderWithSpacing(<ToolStartHistoryRow item={row} />);
   if (row.kind === "tool_done") return renderWithSpacing(<ToolHistoryRow item={row} />);
+  if (row.kind === "tool_group") return renderWithSpacing(<ToolGroupRow item={row} />);
   if (row.kind === "worker_event") return renderWithSpacing(<WorkerEventRow item={row} />);
   if (row.kind === "worker_error") return renderWithSpacing(<WorkerErrorRow item={row} />);
   if (row.kind === "info") {
@@ -219,6 +214,10 @@ function ToolStartHistoryRow({
       formatters={bossToolFormatters}
     />
   );
+}
+
+function ToolGroupRow({ item }: { item: BossToolGroupItem }): React.ReactElement {
+  return <ToolGroupExecution tools={item.tools} summaryRenderers={bossToolGroupRenderers} />;
 }
 
 function ToolHistoryRow({ item }: { item: BossToolDoneItem }): React.ReactElement {
@@ -513,46 +512,67 @@ export function BossStreamingTurnView({
   turn,
   isRunning,
   liveItems = [],
+  lastPendingHistoryItem,
   lastHistoryItem,
+  availableTerminalHeight = 20,
 }: {
-  turn: StreamingTurn;
+  turn: StreamingTurn | null;
   isRunning: boolean;
   liveItems?: HistoryItem[];
+  lastPendingHistoryItem?: HistoryItem;
   lastHistoryItem?: HistoryItem;
+  availableTerminalHeight?: number;
 }): React.ReactElement {
-  const visibleLiveItems = liveItems.filter(
-    (item) =>
+  const visibleLiveItems: BossChatLivePaneItem[] = liveItems.filter(
+    (item): item is BossChatLivePaneItem =>
+      item.kind === "user" ||
       item.kind === "tool_start" ||
       item.kind === "tool_done" ||
+      item.kind === "tool_group" ||
       item.kind === "compacting" ||
       item.kind === "compacted",
   );
   const lastLiveItem = visibleLiveItems[visibleLiveItems.length - 1];
+  const visibleStreamingText = turn?.text ?? "";
+  const previousTranscriptItem = lastPendingHistoryItem ?? lastHistoryItem;
+  const isAwaitingAssistantAfterUser =
+    isRunning &&
+    visibleStreamingText.trim().length === 0 &&
+    (lastLiveItem?.kind === "user" || (!lastLiveItem && previousTranscriptItem?.kind === "user"));
+  const shouldReserveStreamingSpacing =
+    isRunning &&
+    (visibleStreamingText.trim().length > 0 ||
+      visibleLiveItems.some((item) => BOSS_SPACING_KINDS.has(item.kind)) ||
+      isAwaitingAssistantAfterUser);
   const assistantMarginTop = shouldTopSpaceStreamingAssistant({
-    visibleStreamingText: turn.text,
+    visibleStreamingText,
     lastLiveItem,
+    lastPendingHistoryItem,
     lastHistoryItem,
+    spacingKinds: BOSS_SPACING_KINDS,
+    compactBoundaries: BOSS_COMPACT_BOUNDARIES,
   })
     ? 1
     : 0;
 
   return (
-    <Box flexDirection="column">
-      {visibleLiveItems.map((item, index, items) => (
+    <ChatLivePane
+      liveItems={visibleLiveItems}
+      renderItem={(_item, index) => (
         <BossTranscriptRow
-          key={item.id}
-          row={item}
-          previousRow={index > 0 ? items[index - 1] : lastHistoryItem}
+          row={visibleLiveItems[index]!}
+          previousRow={index > 0 ? visibleLiveItems[index - 1] : previousTranscriptItem}
         />
-      ))}
-      <StreamingArea
-        isRunning={isRunning}
-        streamingText={turn.text}
-        streamingThinking=""
-        thinkingMs={turn.thinkingMs}
-        renderMarkdown
-        assistantMarginTop={assistantMarginTop}
-      />
-    </Box>
+      )}
+      isRunning={isRunning}
+      visibleStreamingText={visibleStreamingText}
+      streamingThinking=""
+      thinkingMs={turn?.thinkingMs ?? 0}
+      reserveStreamingSpacing={shouldReserveStreamingSpacing}
+      renderMarkdown
+      measuredLiveAreaRows={availableTerminalHeight}
+      assistantMarginTop={assistantMarginTop}
+      streamingContinuation={false}
+    />
   );
 }

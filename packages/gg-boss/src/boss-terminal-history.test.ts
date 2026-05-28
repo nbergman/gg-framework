@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { stripAnsi } from "@kenkaiiii/ggcoder/ui/terminal-history-format";
 import { loadTheme } from "@kenkaiiii/ggcoder/ui/theme";
-import { createBossTerminalHistoryPrinter } from "./boss-terminal-history.js";
+import {
+  createBossTerminalHistoryPrinter,
+  serializeBossItemToTerminalHistory,
+} from "./boss-terminal-history.js";
 import type { BossDisplayItem } from "./boss-ui-items.js";
 
 const context = {
@@ -37,6 +41,59 @@ describe("boss terminal history", () => {
     expect(writes).toHaveLength(2);
   });
 
+  it("serializes shared chat rows with gg-coder finalized-history chrome", () => {
+    const user: BossDisplayItem = { kind: "user", id: "u1", text: "Ship it", timestamp: 1 };
+    const assistant: BossDisplayItem = {
+      kind: "assistant",
+      id: "a1",
+      text: "Hello **boss**",
+      durationMs: 1,
+    };
+    const tool: BossDisplayItem = {
+      kind: "tool_done",
+      id: "t1",
+      name: "bash",
+      args: { command: "printf hi" },
+      result: "Exit code: 0\nhi",
+      isError: false,
+      durationMs: 1,
+    };
+
+    const userOutput = stripAnsi(serializeBossItemToTerminalHistory(user, context));
+    const assistantOutput = stripAnsi(serializeBossItemToTerminalHistory(assistant, context));
+    const toolOutput = stripAnsi(serializeBossItemToTerminalHistory(tool, context));
+
+    expect(userOutput.split("\n")[0]).toBe("▄".repeat(context.columns));
+    expect(userOutput).toContain("> Ship it");
+    expect(userOutput.split("\n")[2]).toBe("▀".repeat(context.columns));
+    expect(assistantOutput).toMatch(/^ [⏺●] Hello boss/);
+    expect(toolOutput).toContain("Bash(printf hi)");
+    expect(toolOutput).toContain("  ⎿  hi");
+  });
+
+  it("does not add blank separators between assistant and boss tool rows", () => {
+    const writes: string[] = [];
+    const printer = createBossTerminalHistoryPrinter();
+    const items: BossDisplayItem[] = [
+      { kind: "assistant", id: "a1", text: "I’ll list the workers.", durationMs: 1 },
+      {
+        kind: "tool_done",
+        id: "t1",
+        name: "list_workers",
+        args: {},
+        result: "- app: idle\n- api: idle",
+        isError: false,
+        durationMs: 1,
+      },
+    ];
+
+    printer.print(items, context, { write: (data) => writes.push(data) });
+
+    const output = stripAnsi(writes.join(""));
+    expect(output).toMatch(new RegExp("list the workers\\.\\n [⏺●] List Workers"));
+    expect(output).not.toMatch(new RegExp("list the workers\\.\\n\\n [⏺●] List Workers"));
+  });
+
   it("separates Boss-only worker events from compact user to assistant boundary", () => {
     const writes: string[] = [];
     const printer = createBossTerminalHistoryPrinter();
@@ -61,5 +118,6 @@ describe("boss terminal history", () => {
     expect(output).toContain("Starting.");
     expect(output).toContain("app");
     expect(output).toContain("turn 1");
+    expect(output).toContain("  ⎿  ");
   });
 });

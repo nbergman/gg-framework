@@ -11,6 +11,7 @@ export { UserMessage } from "./UserMessage.js";
 export { AssistantMessage } from "./AssistantMessage.js";
 export { DiffView } from "./DiffView.js";
 export { ToolExecution, type ToolExecutionFormatters } from "./ToolExecution.js";
+export { ToolGroupExecution } from "./ToolGroupExecution.js";
 export { ToolUseLoader } from "./ToolUseLoader.js";
 export { MessageResponse } from "./MessageResponse.js";
 export { Footer } from "./Footer.js";

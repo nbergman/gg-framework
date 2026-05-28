@@ -1,4 +1,5 @@
 import { renderToString } from "ink";
+import { stripAnsi } from "@kenkaiiii/ggcoder/ui/terminal-history-format";
 import { describe, expect, it } from "vitest";
 import { AnimationProvider } from "@kenkaiiii/ggcoder/ui";
 import { ThemeContext, loadTheme } from "@kenkaiiii/ggcoder/ui/theme";
@@ -58,6 +59,24 @@ describe("boss live/history transcript parity", () => {
 
     expect(live.indexOf("Read")).toBeGreaterThanOrEqual(0);
     expect(live.indexOf("Done.")).toBeGreaterThan(live.indexOf("Read"));
+  });
+
+  it("reserves the same assistant slot after a submitted user row as ggcoder ChatLivePane", () => {
+    const live = stripAnsi(
+      wrap(
+        <BossStreamingTurnView
+          turn={null}
+          isRunning
+          liveItems={[{ kind: "user", id: "u1", text: "Run this", timestamp: 1 }]}
+          lastHistoryItem={assistant}
+        />,
+      ),
+    );
+
+    const lines = live.split("\n");
+    const userBottomIndex = lines.findIndex((line) => line.startsWith("▀"));
+    expect(userBottomIndex).toBeGreaterThanOrEqual(0);
+    expect(lines[userBottomIndex + 1]).toBe("");
   });
 
   it("uses the same previous-row boundary when finalized history replaces live rows", () => {
