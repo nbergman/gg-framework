@@ -449,7 +449,7 @@ function renderAssistant(
         : prefixFirstLine(body, ` ${color(context.theme.primary, BLACK_CIRCLE)} `, "   "),
     );
   }
-  return block(lines);
+  return lines.join("\n");
 }
 
 function renderToolStart(
