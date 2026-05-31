@@ -85,9 +85,10 @@ import {
   getMaxThinkingLevel,
   getModel,
 } from "./core/model-registry.js";
-import { MCPClientManager, getMCPServers } from "./core/mcp/index.js";
+import { MCPClientManager, getAllMcpServers } from "./core/mcp/index.js";
 import { runPixel } from "./cli/pixel.js";
 import { runLogin, runLogout, runDoctor } from "./cli/auth.js";
+import { runMcp } from "./cli/mcp.js";
 import {
   CLI_VERSION,
   LOGO_LINES,
@@ -154,6 +155,7 @@ function printHelp(): void {
     ["telegram", "Configure Telegram bot integration"],
     ["agent-home-login", "Configure Agent Home relay connection"],
     ["agent-home", "Connect to Agent Home as a remote agent"],
+    ["mcp", "Add and manage MCP servers"],
   ];
   for (const [name, desc] of cmds) {
     console.log(`  ${accent(name.padEnd(20))} ${dim(desc)}`);
@@ -227,6 +229,7 @@ function createCliSubcommandHandlers(): Record<CliSubcommandName, () => void> {
 
   return {
     pixel: () => runWithStandardErrorHandling(() => runPixel({ runInkTUI }), true),
+    mcp: () => runWithStandardErrorHandling(runMcp),
     login: () => runWithStandardErrorHandling(runLogin),
     logout: () => runWithStandardErrorHandling(runLogout),
     sessions: () => runWithStandardErrorHandling(runSessions),
@@ -560,7 +563,8 @@ async function runInkTUI(opts: {
     initialMcpConnectPromise ??= (async () => {
       const providerApiKey =
         provider === "glm" ? credentialsByProvider["glm"]?.accessToken : undefined;
-      return mcpManager.connectAll(getMCPServers(provider, providerApiKey));
+      const servers = await getAllMcpServers(provider, providerApiKey, cwd);
+      return mcpManager.connectAll(servers);
     })();
     return initialMcpConnectPromise;
   };
