@@ -71,6 +71,7 @@ import {
   extractPlanSteps,
   findCompletedMarkers,
   markStepsCompleted,
+  rebasePlanSteps,
   segmentDisplayText,
   stripDoneMarkers,
   type PlanStep,
@@ -993,10 +994,31 @@ export function App(props: AppProps) {
           if (planStepsRef.current.length > 0) {
             const completed = findCompletedMarkers(text);
             if (completed.size > 0) {
-              const updated = markStepsCompleted(planStepsRef.current, completed);
-              if (updated !== planStepsRef.current) {
-                planStepsRef.current = updated;
-                setPlanSteps(updated);
+              const planPath = approvedPlanPathRef.current;
+              // The agent can rewrite/expand the approved plan mid-run, so the
+              // snapshot captured at approval goes stale (wrong total, and new
+              // [DONE:n] markers match nothing). Re-extract from the live plan
+              // file and re-base onto it before applying markers. The file read
+              // is async; apply markers inside the same async step to avoid a
+              // race with the snapshot. Fall back to the in-memory snapshot if
+              // there is no plan path or the read fails.
+              const applyMarkers = (base: PlanStep[]): void => {
+                const updated = markStepsCompleted(base, completed);
+                if (updated !== planStepsRef.current) {
+                  planStepsRef.current = updated;
+                  setPlanSteps(updated);
+                }
+              };
+              if (planPath) {
+                void import("node:fs/promises")
+                  .then(({ readFile }) => readFile(planPath, "utf-8"))
+                  .then((planContent) => {
+                    const fresh = extractPlanSteps(planContent);
+                    applyMarkers(rebasePlanSteps(planStepsRef.current, fresh));
+                  })
+                  .catch(() => applyMarkers(planStepsRef.current));
+              } else {
+                applyMarkers(planStepsRef.current);
               }
               // Real progress happened — reset the stuck-guard so the next
               // step gets its own fresh nudge budget.
@@ -1408,6 +1430,11 @@ export function App(props: AppProps) {
             if (flushed.length > 0) {
               queueFlush(flushed);
             }
+            // The pre-tool text was just pinned; the hook resets its streaming
+            // buffer at this same boundary. Reset the progressive-flush offset
+            // so post-tool text is measured from zero (stale flushedChars would
+            // otherwise slice into the fresh, shorter buffer).
+            streamedAssistantFlushRef.current = { flushedChars: 0, text: "" };
             return [
               ...remaining,
               {
@@ -1514,86 +1541,99 @@ export function App(props: AppProps) {
         },
         [queueFlush],
       ),
-      onDone: useCallback((durationMs: number, toolsUsed: string[]) => {
-        log("INFO", "agent", `Agent done`, {
-          duration: `${durationMs}ms`,
-          toolsUsed: toolsUsed.join(",") || "none",
-        });
-        const doneDecision = getDoneFlushDecision({
-          planOverlayPending: planOverlayPendingRef.current,
-        });
-        // Don't show "done" status when the plan review pane is about to open —
-        // the agent loop finished but we're waiting for user approval/review.
-        // Still flush live transcript rows before the pane remounts; otherwise
-        // setup output remains in ephemeral liveItems and appears to vanish.
-        if (doneDecision.showDoneStatus) {
-          setDoneStatus({ durationMs, toolsUsed, verb: pickDurationVerb(toolsUsed) });
-          playNotificationSound();
-        }
-        // Keep the final assistant response mounted in the live frame after a
-        // normal chat turn finishes. Moving a large final response to terminal
-        // history at this moment writes many scrollback rows while the footer is
-        // still mounted, which visibly pushes the input/footer upward. The final
-        // response is flushed on the next submit before the new prompt is shown.
-        // Non-chat overlay transitions still flush so setup/plan output
-        // does not vanish during remounts.
-        if (doneDecision.flushLiveItems && !doneDecision.showDoneStatus) {
-          setLiveItems((prev) => {
-            if (prev.length > 0) queueFlush(prev);
-            return prev;
+      onDone: useCallback(
+        (
+          durationMs: number,
+          toolsUsed: string[],
+          runStats?: { counts: Record<string, number>; tokens: number },
+        ) => {
+          log("INFO", "agent", `Agent done`, {
+            duration: `${durationMs}ms`,
+            toolsUsed: toolsUsed.join(",") || "none",
           });
-        }
+          const doneDecision = getDoneFlushDecision({
+            planOverlayPending: planOverlayPendingRef.current,
+          });
+          // Don't show "done" status when the plan review pane is about to open —
+          // the agent loop finished but we're waiting for user approval/review.
+          // Still flush live transcript rows before the pane remounts; otherwise
+          // setup output remains in ephemeral liveItems and appears to vanish.
+          if (doneDecision.showDoneStatus) {
+            setDoneStatus({
+              durationMs,
+              toolsUsed,
+              verb: pickDurationVerb(toolsUsed),
+              counts: runStats?.counts,
+              tokens: runStats?.tokens,
+            });
+            playNotificationSound();
+          }
+          // Keep the final assistant response mounted in the live frame after a
+          // normal chat turn finishes. Moving a large final response to terminal
+          // history at this moment writes many scrollback rows while the footer is
+          // still mounted, which visibly pushes the input/footer upward. The final
+          // response is flushed on the next submit before the new prompt is shown.
+          // Non-chat overlay transitions still flush so setup/plan output
+          // does not vanish during remounts.
+          if (doneDecision.flushLiveItems && !doneDecision.showDoneStatus) {
+            setLiveItems((prev) => {
+              if (prev.length > 0) queueFlush(prev);
+              return prev;
+            });
+          }
 
-        // Run-all: auto-start next pending task after a short delay.
-        if (runAllTasksRef.current) {
-          setTimeout(() => {
-            const cwd = cwdRef.current;
-            const next = getNextPendingTask(cwd);
-            if (next) {
-              markTaskInProgress(cwd, next.id);
-              startTaskRef.current(next.title, next.prompt, next.id);
-            } else {
-              setRunAllTasks(false);
-              log("INFO", "tasks", "Run-all complete — no more pending tasks");
-            }
-          }, 500);
-        }
+          // Run-all: auto-start next pending task after a short delay.
+          if (runAllTasksRef.current) {
+            setTimeout(() => {
+              const cwd = cwdRef.current;
+              const next = getNextPendingTask(cwd);
+              if (next) {
+                markTaskInProgress(cwd, next.id);
+                startTaskRef.current(next.title, next.prompt, next.id);
+              } else {
+                setRunAllTasks(false);
+                log("INFO", "tasks", "Run-all complete — no more pending tasks");
+              }
+            }, 500);
+          }
 
-        // Pixel fix: observe branch + commits, patch status, optionally pick
-        // up the next open error if run-all is active.
-        const pendingFix = currentPixelFixRef.current;
-        if (pendingFix) {
-          currentPixelFixRef.current = null;
-          void (async () => {
-            try {
-              const { finalizePixelFix } = await import("../core/pixel-fix.js");
-              const result = await finalizePixelFix(pendingFix);
-              log("INFO", "pixel", `Pixel fix done: ${result.outcome}`, {
-                errorId: pendingFix.errorId,
-                reason: result.reason,
-              });
-            } catch (err) {
-              log("ERROR", "pixel", `Pixel finalize failed: ${(err as Error).message}`);
-            }
+          // Pixel fix: observe branch + commits, patch status, optionally pick
+          // up the next open error if run-all is active.
+          const pendingFix = currentPixelFixRef.current;
+          if (pendingFix) {
+            currentPixelFixRef.current = null;
+            void (async () => {
+              try {
+                const { finalizePixelFix } = await import("../core/pixel-fix.js");
+                const result = await finalizePixelFix(pendingFix);
+                log("INFO", "pixel", `Pixel fix done: ${result.outcome}`, {
+                  errorId: pendingFix.errorId,
+                  reason: result.reason,
+                });
+              } catch (err) {
+                log("ERROR", "pixel", `Pixel finalize failed: ${(err as Error).message}`);
+              }
 
-            if (runAllPixelRef.current) {
-              setTimeout(() => {
-                void (async () => {
-                  const { fetchPixelEntries } = await import("../core/pixel.js");
-                  const data = await fetchPixelEntries();
-                  const next = data.entries.find((e) => e.status === "open");
-                  if (next) {
-                    startPixelFixRef.current(next.errorId);
-                  } else {
-                    setRunAllPixel(false);
-                    log("INFO", "pixel", "Run-all complete — no more open errors");
-                  }
-                })();
-              }, 500);
-            }
-          })();
-        }
-      }, []),
+              if (runAllPixelRef.current) {
+                setTimeout(() => {
+                  void (async () => {
+                    const { fetchPixelEntries } = await import("../core/pixel.js");
+                    const data = await fetchPixelEntries();
+                    const next = data.entries.find((e) => e.status === "open");
+                    if (next) {
+                      startPixelFixRef.current(next.errorId);
+                    } else {
+                      setRunAllPixel(false);
+                      log("INFO", "pixel", "Run-all complete — no more open errors");
+                    }
+                  })();
+                }, 500);
+              }
+            })();
+          }
+        },
+        [],
+      ),
       onAborted: useCallback(() => {
         log("WARN", "agent", "Agent run aborted by user");
         setRunAllPixel(false);

@@ -98,6 +98,45 @@ function extractStepsSection(planContent: string): string | undefined {
 }
 
 /**
+ * Re-base a frozen step list onto a freshly extracted one.
+ *
+ * The progress widget captures `extractPlanSteps` once, at plan-approval time.
+ * But the agent can rewrite or expand the approved plan while implementing it
+ * (e.g. a 2-step plan becomes 12 steps). When that happens the frozen snapshot
+ * goes stale: the total is wrong and `[DONE:n]` markers for the new steps can't
+ * be matched. Re-extracting from the live plan and re-basing onto it keeps the
+ * total in sync.
+ *
+ * Completion is carried over BY STEP NUMBER (not text), so a reworded step that
+ * was already done stays done. New steps adopt the fresh text and start
+ * incomplete. If the fresh plan has no steps (e.g. the step section was
+ * temporarily removed mid-edit) the previous list is returned unchanged so we
+ * never blow away real progress. The previous array reference is returned when
+ * nothing meaningfully changed, so React state setters can no-op.
+ */
+export function rebasePlanSteps(previous: PlanStep[], fresh: PlanStep[]): PlanStep[] {
+  if (fresh.length === 0) return previous;
+
+  const completedByStep = new Set(previous.filter((s) => s.completed).map((s) => s.step));
+  const rebased = fresh.map((s) =>
+    completedByStep.has(s.step) && !s.completed ? { ...s, completed: true } : s,
+  );
+
+  const unchanged =
+    rebased.length === previous.length &&
+    rebased.every((s, i) => {
+      const prev = previous[i];
+      return (
+        prev !== undefined &&
+        prev.step === s.step &&
+        prev.text === s.text &&
+        prev.completed === s.completed
+      );
+    });
+  return unchanged ? previous : rebased;
+}
+
+/**
  * Strip [DONE:n] markers from text for display purposes.
  * These markers are machine-readable signals for the progress widget,
  * not meant to be shown to the user.

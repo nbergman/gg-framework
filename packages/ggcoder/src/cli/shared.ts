@@ -1,12 +1,34 @@
-import { createRequire } from "node:module";
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 import type { Provider } from "@kenkaiiii/gg-ai";
 
-const _require = createRequire(import.meta.url);
-// This module lives one directory deeper than cli.ts (src/cli/ → dist/cli/),
-// so the package manifest is two levels up rather than one.
-export const CLI_VERSION = (_require("../../package.json") as { version: string }).version;
+// Resolve the package version by walking up from this module to the nearest
+// package.json. A bare `require("../../package.json")` breaks when this module
+// is re-bundled into a sibling package (e.g. gg-boss), where the relative path
+// no longer points at ggcoder's manifest — so it crashes the CLI. Walking up
+// from import.meta.url always finds a valid manifest and never throws.
+function resolveCliVersion(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
+        version?: string;
+      };
+      if (manifest.version) return manifest.version;
+    } catch {
+      // no package.json at this level — keep walking up
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return "0.0.0";
+}
+
+export const CLI_VERSION = resolveCliVersion();
 
 // ── Logo + gradient (mirrors terminal-history.ts banner) ────────────
 export const LOGO_LINES = [

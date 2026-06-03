@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractPlanSteps,
+  rebasePlanSteps,
   segmentDisplayText,
   stripDoneMarkers,
   type PlanStep,
@@ -87,6 +88,66 @@ describe("extractPlanSteps", () => {
       { step: 1, text: "First real step here.", completed: false },
       { step: 2, text: "Second real step here.", completed: false },
     ]);
+  });
+});
+
+describe("rebasePlanSteps", () => {
+  // The agent can rewrite/expand the approved plan mid-implementation. The
+  // progress widget must track the CURRENT plan, not the snapshot captured at
+  // approval time, while preserving steps already marked done.
+  it("adopts the new step list when the plan grows", () => {
+    const frozen: PlanStep[] = [
+      { step: 1, text: "Scaffold the helper module.", completed: true },
+      { step: 2, text: "Wire it into the UI.", completed: false },
+    ];
+    const expanded: PlanStep[] = [
+      { step: 1, text: "Scaffold the helper module.", completed: false },
+      { step: 2, text: "Wire it into the UI.", completed: false },
+      { step: 3, text: "Add the header chips.", completed: false },
+      { step: 4, text: "Add the vital-signs line.", completed: false },
+    ];
+    const rebased = rebasePlanSteps(frozen, expanded);
+    expect(rebased).toHaveLength(4);
+    // Step 1 was already done — completion is preserved across the rebase.
+    expect(rebased[0]?.completed).toBe(true);
+    expect(rebased.filter((s) => s.completed)).toHaveLength(1);
+    // New steps adopt the fresh text and start incomplete.
+    expect(rebased[2]).toEqual({ step: 3, text: "Add the header chips.", completed: false });
+  });
+
+  it("preserves completion by step number, not text", () => {
+    const frozen: PlanStep[] = [
+      { step: 1, text: "Old wording for step one.", completed: true },
+      { step: 2, text: "Old wording for step two.", completed: true },
+    ];
+    const rewritten: PlanStep[] = [
+      { step: 1, text: "Reworded step one.", completed: false },
+      { step: 2, text: "Reworded step two.", completed: false },
+      { step: 3, text: "A brand new step three.", completed: false },
+    ];
+    const rebased = rebasePlanSteps(frozen, rewritten);
+    expect(rebased[0]).toEqual({ step: 1, text: "Reworded step one.", completed: true });
+    expect(rebased[1]).toEqual({ step: 2, text: "Reworded step two.", completed: true });
+    expect(rebased[2]?.completed).toBe(false);
+  });
+
+  it("returns the previous array unchanged when the fresh plan has no steps", () => {
+    const frozen: PlanStep[] = [{ step: 1, text: "Only step.", completed: true }];
+    expect(rebasePlanSteps(frozen, [])).toBe(frozen);
+  });
+
+  it("returns the previous array reference when nothing changed", () => {
+    const frozen: PlanStep[] = [
+      { step: 1, text: "Step one.", completed: true },
+      { step: 2, text: "Step two.", completed: false },
+    ];
+    const same: PlanStep[] = [
+      { step: 1, text: "Step one.", completed: false },
+      { step: 2, text: "Step two.", completed: false },
+    ];
+    // Same length, same text, same derived completion → identity preserved so
+    // React state setters can no-op.
+    expect(rebasePlanSteps(frozen, same)).toBe(frozen);
   });
 });
 
