@@ -1,5 +1,17 @@
 # @kenkaiiii/ggcoder
 
+## 4.7.0
+
+### Minor Changes
+
+- Add `task_send` tool for interactive control of background processes. Background processes started with `run_in_background` now spawn with a stdin pipe, and the agent can answer prompts, drive REPLs, and feed scaffolders via `task_send` (with optional Enter/EOF), pairing with the existing `task_output`/`task_stop` tools.
+
+### Patch Changes
+
+- @kenkaiiii/gg-ai@4.7.0
+- @kenkaiiii/gg-agent@4.7.0
+- @kenkaiiii/gg-core@4.7.0
+
 ## 4.6.3
 
 ### Patch Changes
