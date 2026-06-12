@@ -196,8 +196,8 @@ importers:
         specifier: ^5.6.2
         version: 5.6.2
       ink:
-        specifier: npm:@kenkaiiii/ink@6.8.0-gg.1
-        version: '@kenkaiiii/ink@6.8.0-gg.1(@types/react@19.2.14)(react@19.2.5)'
+        specifier: npm:@kenkaiiii/ink@6.8.0-gg.2
+        version: '@kenkaiiii/ink@6.8.0-gg.2(@types/react@19.2.14)(react@19.2.5)'
       react:
         specifier: ^19.2.5
         version: 19.2.5
@@ -420,8 +420,8 @@ importers:
         specifier: ^7.0.5
         version: 7.0.5
       ink:
-        specifier: npm:@kenkaiiii/ink@6.8.0-gg.1
-        version: '@kenkaiiii/ink@6.8.0-gg.1(@types/react@19.2.14)(react@19.2.5)'
+        specifier: npm:@kenkaiiii/ink@6.8.0-gg.2
+        version: '@kenkaiiii/ink@6.8.0-gg.2(@types/react@19.2.14)(react@19.2.5)'
       lowlight:
         specifier: ^3.3.0
         version: 3.3.0
@@ -2021,8 +2021,8 @@ packages:
   '@kenkaiiii/agent-home-sdk@0.3.8':
     resolution: {integrity: sha512-RH/5ZsqRgHWLqjQcjpvclK1tUrItRUTbJzoubFvyK2cT2YGjotrPIu+1+54eZdhR/oH8Bk77KRnjAw5SOBRbcw==}
 
-  '@kenkaiiii/ink@6.8.0-gg.1':
-    resolution: {integrity: sha512-eafGEGHH4tf6PFY0fqlBcw7EYlVFdSC+GpcndQuZFVAOkXZPvoDsn/0QEGx06Z2YkEz1xD7yBqIJdaTLZiwgCQ==}
+  '@kenkaiiii/ink@6.8.0-gg.2':
+    resolution: {integrity: sha512-b2dmymMYLo/iFFQ1qZKGSFTR2bB5J67EhHhcfLUbppZY9XlKWVpVlLxnoXfud93Fq1qy6NDtOR3qGYK5KDfXYw==}
     engines: {node: '>=20'}
     peerDependencies:
       '@types/react': '>=19.0.0'
@@ -7116,7 +7116,7 @@ snapshots:
 
   '@kenkaiiii/agent-home-sdk@0.3.8': {}
 
-  '@kenkaiiii/ink@6.8.0-gg.1(@types/react@19.2.14)(react@19.2.5)':
+  '@kenkaiiii/ink@6.8.0-gg.2(@types/react@19.2.14)(react@19.2.5)':
     dependencies:
       '@alcalzone/ansi-tokenize': 0.2.5
       ansi-escapes: 7.3.0

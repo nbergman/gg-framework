@@ -1,5 +1,5 @@
 diff --git a/build/ink.js b/build/ink.js
-index 30019a073d38ed05dca08f6221af187c429a536b..6437c88807ab986767c3c466e28500ceebafaf72 100644
+index 30019a0..497f3be 100644
 --- a/build/ink.js
 +++ b/build/ink.js
 @@ -1,4 +1,5 @@
@@ -321,13 +321,72 @@ index 30019a073d38ed05dca08f6221af187c429a536b..6437c88807ab986767c3c466e28500ce
          this.lastOutput = output;
          this.lastOutputToRender = outputToRender;
          this.lastOutputHeight = outputHeight;
-@@ -368,6 +576,40 @@ export default class Ink {
+@@ -368,6 +576,99 @@ export default class Ink {
              reconciler.flushSyncWork();
          }
      }
 +    // [gg patch] Toggle pad creation at runtime. See frameAnchorActive.
++    // Deactivation reclaims leftover pad debt: a frame shrink right before the
++    // run ended (tool panel collapse, finalization without a compensating
++    // insert) left blank pad rows above the frame, and at idle nothing else
++    // consumes them — they sit on screen as a permanent blank gap right above
++    // the final response. While the frame is bottom-pinned the gap is
++    // repainted in place with the app-provided transcript tail (footer stays
++    // put); otherwise the frame rises over the pads (the vacated rows below
++    // the risen frame are unwritten screen, not content).
 +    setFrameAnchorActive(active) {
++        const reclaimDebt = this.frameAnchorActive && !active ? this.framePadDebt : 0;
 +        this.frameAnchorActive = active;
++        if (reclaimDebt <= 0 || this.isUnmounted) {
++            return;
++        }
++        this.framePadDebt = 0;
++        if (this.options.debug || isInCi || !this.options.stdout.isTTY) {
++            return;
++        }
++        const debt = Math.min(reclaimDebt, Math.max(0, this.options.stdout.rows - 2));
++        const outputHeight = this.lastOutputHeight;
++        const sync = shouldSynchronize(this.options.stdout);
++        const bottomPinned = this.linesAboveFrame + outputHeight + 1 >= this.options.stdout.rows;
++        if (bottomPinned && typeof this.frameShrinkBackfill === 'function') {
++            const needRows = Math.max(0, this.options.stdout.rows - outputHeight - 1);
++            let fill;
++            try {
++                fill = needRows > 0 ? this.frameShrinkBackfill(needRows) : '';
++            }
++            catch {
++                fill = undefined;
++            }
++            if (typeof fill === 'string') {
++                const backfillText = fill === '' || fill.endsWith('\n') ? fill : fill + '\n';
++                if (sync) {
++                    this.options.stdout.write(bsu);
++                }
++                // In-place erase (home + ED) — ESC[2J is unusable here, see the
++                // bottom-pinned idle repaint above (iTerm2/Terminal.app push 2J
++                // into scrollback).
++                this.options.stdout.write(ansiEscapes.cursorTo(0, 0) + ansiEscapes.eraseDown + backfillText + this.lastOutputToRender);
++                this.log.sync(this.lastOutputToRender);
++                if (sync) {
++                    this.options.stdout.write(esu);
++                }
++                this.linesAboveFrame = (backfillText.match(/\n/g) ?? []).length;
++                return;
++            }
++        }
++        // No backfill provider or not pinned: consume the pads by rewriting
++        // the frame `debt` rows higher — same cursor-up consume the atomic
++        // write path uses, just without new insert bytes.
++        if (sync) {
++            this.options.stdout.write(bsu);
++        }
++        this.log.clear();
++        this.options.stdout.write(ansiEscapes.cursorUp(debt));
++        this.log(this.lastOutputToRender);
++        if (sync) {
++            this.options.stdout.write(esu);
++        }
++        this.linesAboveFrame = Math.max(0, this.linesAboveFrame - debt);
 +    }
 +    // [gg patch] Install the transcript-tail provider. See frameShrinkBackfill.
 +    setFrameShrinkBackfill(fn) {
@@ -362,7 +421,7 @@ index 30019a073d38ed05dca08f6221af187c429a536b..6437c88807ab986767c3c466e28500ce
      writeToStdout(data) {
          if (this.isUnmounted) {
              return;
-@@ -390,6 +632,15 @@ export default class Ink {
+@@ -390,6 +691,15 @@ export default class Ink {
          if (sync) {
              this.options.stdout.write(esu);
          }
@@ -378,7 +437,7 @@ index 30019a073d38ed05dca08f6221af187c429a536b..6437c88807ab986767c3c466e28500ce
      }
      writeToStderr(data) {
          if (this.isUnmounted) {
-@@ -414,6 +665,11 @@ export default class Ink {
+@@ -414,6 +724,11 @@ export default class Ink {
          if (sync) {
              this.options.stdout.write(esu);
          }
@@ -390,7 +449,7 @@ index 30019a073d38ed05dca08f6221af187c429a536b..6437c88807ab986767c3c466e28500ce
      }
      // eslint-disable-next-line @typescript-eslint/ban-types
      unmount(error) {
-@@ -452,6 +708,14 @@ export default class Ink {
+@@ -452,6 +767,14 @@ export default class Ink {
                  this.onRender();
              }
          }
@@ -405,7 +464,7 @@ index 30019a073d38ed05dca08f6221af187c429a536b..6437c88807ab986767c3c466e28500ce
          // Mark as unmounted after the final render but before stdout writes
          // that could re-enter exit() via synchronous write callbacks.
          this.isUnmounted = true;
-@@ -548,6 +812,10 @@ export default class Ink {
+@@ -548,6 +871,10 @@ export default class Ink {
              // Sync lastOutput so that unmount's final onRender
              // sees it as unchanged and log-update skips it
              this.log.sync(this.lastOutputToRender || this.lastOutput + '\n');
@@ -417,7 +476,7 @@ index 30019a073d38ed05dca08f6221af187c429a536b..6437c88807ab986767c3c466e28500ce
      }
      patchConsole() {
 diff --git a/build/render.js b/build/render.js
-index 6526022c509778bf8ebf95af33be29b2626934be..123623091d17f95af8129da7b4bf30c586c38545 100644
+index 6526022..1236230 100644
 --- a/build/render.js
 +++ b/build/render.js
 @@ -28,6 +28,14 @@ const render = (node, options) => {

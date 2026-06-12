@@ -84,7 +84,7 @@ import {
   flushOnTurnText,
   flushOnTurnEnd,
   flushOverflow,
-  countOversizedFlushItems,
+  splitOversizedPinnedItems,
 } from "./live-item-flush.js";
 import {
   splitAssistantStreamingText,
@@ -1140,19 +1140,22 @@ export function App(props: AppProps) {
             // The check is cumulative over the WHOLE pinned set (previously
             // pinned assistant items + this turn's, which [DONE:N]
             // segmentation can split into several): flush the leading prefix
-            // so the remaining suffix fits, preserving transcript order. The
-            // transcript-history layout effect removes the flushed ids from
-            // the live frame after printing.
+            // so the remaining suffix fits, preserving transcript order. Return
+            // only that suffix immediately; otherwise the just-flushed prefix
+            // keeps the live-area clamp engaged for one stale frame, reserving
+            // blank rows above a short final response.
             const pinned = [...assistantItems, ...nextItems];
             const layout = liveLayoutRef.current;
-            const oversizedCount = countOversizedFlushItems(
+            const oversizedSplit = splitOversizedPinnedItems(
               pinned,
               (itemText) => estimateRenderedRows(itemText, layout.columns),
               layout.liveAreaRows,
             );
-            if (oversizedCount > 0) queueFlush(pinned.slice(0, oversizedCount));
+            if (oversizedSplit.flushed.length > 0) {
+              queueFlush(oversizedSplit.flushed);
+            }
             streamedAssistantFlushRef.current = { flushedChars: 0, text: "" };
-            return pinned;
+            return oversizedSplit.remaining;
           });
         },
         [queueFlush],
@@ -1642,7 +1645,7 @@ export function App(props: AppProps) {
           if (doneDecision.flushLiveItems && !doneDecision.showDoneStatus) {
             setLiveItems((prev) => {
               if (prev.length > 0) queueFlush(prev);
-              return prev;
+              return [];
             });
           }
 

@@ -60,10 +60,11 @@ export function estimateLiveAreaRows({
     } else if (
       item.kind === "tombstone" ||
       item.kind === "banner" ||
+      (item.kind === "plan_transition" && !item.active) ||
       isPanelReplacedToolItem(item)
     ) {
-      // Tool rows render in the pinned LiveToolPanel, not the live area — they
-      // contribute zero rows here.
+      // These rows render outside this pane or as null (panel-replaced tools,
+      // inactive plan transitions), so they contribute zero live-area rows.
       continue;
     } else {
       rows += NON_TEXT_ROW_ESTIMATE;
