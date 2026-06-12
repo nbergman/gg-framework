@@ -1,5 +1,14 @@
 # @kenkaiiii/ggcoder
 
+## 4.8.7
+
+### Patch Changes
+
+- Fix the intermittent blank-row block appearing right before the agent's final response: the patched ink's bottom-anchor pad debt left over from a run-end frame shrink is now reclaimed when the anchor deactivates (ink fork 6.8.0-gg.2). Also: oversized flushed assistant prefixes leave live state immediately, and null-rendering items no longer inflate the live-area clamp estimate.
+  - @kenkaiiii/gg-ai@4.8.7
+  - @kenkaiiii/gg-agent@4.8.7
+  - @kenkaiiii/gg-core@4.8.7
+
 ## 4.8.6
 
 ### Patch Changes
