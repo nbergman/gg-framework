@@ -2869,20 +2869,35 @@ export function App(props: AppProps) {
   // Mid-run bottom-anchor gap reclaim. While the agent runs, the patched ink
   // anchor converts every live-frame SHRINK into pad debt — blank rows emitted
   // above the frame so the footer never jumps up during tool/status churn.
-  // Growth normally consumes those pads, but across a long quiet stretch (e.g.
-  // extended thinking with no streamed output after a tool batch) nothing
-  // consumes them and they sit on screen as a blank gap between the flushed
-  // scrollback transcript and the live frame — the very whitespace users see.
-  // Previously that debt was only reclaimed at idle (run end), so the gap
+  // Growth normally consumes those pads, but when a shrink is NOT followed by
+  // growth the pads linger on screen as a blank gap between the flushed
+  // scrollback transcript and the live frame — the whitespace users see.
+  //
+  // This is ONE mechanism with many triggers, and this single effect covers
+  // them ALL by construction: every debt-creating event mutates one of the
+  // dependencies below, so the debounce re-arms on each and fires once the
+  // frame finally settles. Sources include:
+  //   • the submit boundary — the prior turn flushes + the live frame clears
+  //     (setLiveItems([])) and the open slash menu closes (controls shrink),
+  //     all before the new turn streams a single token (measuredLiveAreaRows +
+  //     liveItems change);
+  //   • a finishing tool batch — panel rows collapse (liveToolFeed / liveItems);
+  //   • status-slot swaps and oversized-item flushes mid-stream;
+  //   • a long quiet thinking stretch after any of the above (no growth comes).
+  // Previously this debt was only reclaimed at idle (run end), so the gap
   // "fixed itself" only once the turn landed in history.
   //
   // Once the live frame has been visually stable for a beat, pulse the anchor
   // off→on: the off transition reclaims the pad debt via the backfill repaint
   // (footer stays bottom-pinned, the gap fills with the transcript tail) and
   // the immediate on transition restores pad protection for the next burst of
-  // churn. The pulse is synchronous so no unpadded frame renders between, and
-  // it is a cheap no-op when there is no debt. Skipped in fullscreen, which
-  // owns the whole screen and never pads.
+  // churn. Both calls are synchronous so no unpadded frame renders between, and
+  // it is a cheap no-op when there is no debt (the off transition early-returns
+  // when pad debt is zero). Skipped in fullscreen, which owns the whole screen
+  // and never pads. The delay trails React's commit + ink's render throttle
+  // (~33ms) and the insertBeforeFrame fallback (100ms) so the compensated
+  // flush has fully rendered before we measure-and-reclaim, while staying short
+  // enough that a stranded gap never lingers long enough to read as a bug.
   useEffect(() => {
     if (props.fullscreen) return;
     if (!setFrameAnchorActive) return;
@@ -2890,7 +2905,7 @@ export function App(props: AppProps) {
     const timer = setTimeout(() => {
       setFrameAnchorActive(false);
       setFrameAnchorActive(true);
-    }, 500);
+    }, 250);
     return () => clearTimeout(timer);
   }, [
     props.fullscreen,
