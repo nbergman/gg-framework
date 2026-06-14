@@ -1,62 +1,199 @@
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
 use futures_util::StreamExt;
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, EventTarget, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
-/// Shared handle to the spawned Node agent sidecar + the port it reported.
+/// One Node agent sidecar, owned by a single window. Each window runs its own
+/// agent against its own project cwd, so windows never share state.
 #[derive(Default)]
-struct Sidecar {
-    child: Mutex<Option<Child>>,
-    port: Mutex<Option<u16>>,
+struct SidecarInstance {
+    child: Option<Child>,
+    port: Option<u16>,
+}
+
+/// Per-window sidecar registry, keyed by window label.
+#[derive(Default)]
+struct Sidecars {
+    map: Mutex<HashMap<String, SidecarInstance>>,
 }
 
 fn sidecar_base(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
 }
 
-fn current_port(app: &tauri::AppHandle) -> Option<u16> {
-    let state: State<Sidecar> = app.state();
-    let p = *state.port.lock().unwrap();
-    p
+/// Resolve the sidecar port for the window that issued a command.
+fn port_for(webview: &WebviewWindow) -> Option<u16> {
+    let state: State<Sidecars> = webview.state();
+    let map = state.map.lock().unwrap();
+    map.get(webview.label()).and_then(|i| i.port)
 }
 
 /// Frontend polls this until it returns a port (mirrors the `sidecar-ready` event).
 #[tauri::command]
-fn sidecar_port(state: State<Sidecar>) -> Option<u16> {
-    *state.port.lock().unwrap()
+fn sidecar_port(webview: WebviewWindow) -> Option<u16> {
+    port_for(&webview)
 }
 
 /// Proxy: current agent/session state.
 #[tauri::command]
-async fn agent_state(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let port = current_port(&app).ok_or("sidecar not ready")?;
+async fn agent_state(webview: WebviewWindow) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
     let res = reqwest::get(format!("{}/state", sidecar_base(port)))
         .await
         .map_err(|e| e.to_string())?;
     res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
 }
 
-/// Proxy: submit a prompt. The reply streams back via the `agent-event` event.
+/// Proxy: submit a prompt (optionally with attachments). The reply streams back
+/// via the `agent-event` event. `attachments` is passed through opaquely.
 #[tauri::command]
-async fn agent_prompt(app: tauri::AppHandle, text: String) -> Result<(), String> {
-    let port = current_port(&app).ok_or("sidecar not ready")?;
+async fn agent_prompt(
+    webview: WebviewWindow,
+    text: String,
+    attachments: Option<serde_json::Value>,
+) -> Result<(), String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
     let client = reqwest::Client::new();
     client
         .post(format!("{}/prompt", sidecar_base(port)))
-        .json(&serde_json::json!({ "text": text }))
+        .json(&serde_json::json!({
+            "text": text,
+            "attachments": attachments.unwrap_or(serde_json::Value::Array(vec![])),
+        }))
         .send()
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
+/// Proxy: resumed conversation history (user + assistant text) for hydration.
+#[tauri::command]
+async fn agent_history(webview: WebviewWindow) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let res = reqwest::get(format!("{}/history", sidecar_base(port)))
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy: start a fresh session (clears history) for this window's project.
+#[tauri::command]
+async fn agent_new_session(webview: WebviewWindow) -> Result<(), String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let client = reqwest::Client::new();
+    client
+        .post(format!("{}/new-session", sidecar_base(port)))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Proxy: provider auth status (which providers are connected).
+#[tauri::command]
+async fn agent_auth_status(webview: WebviewWindow) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let res = reqwest::get(format!("{}/auth/status", sidecar_base(port)))
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy: store an API key for a provider.
+#[tauri::command]
+async fn agent_auth_apikey(
+    webview: WebviewWindow,
+    provider: String,
+    key: String,
+) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{}/auth/apikey", sidecar_base(port)))
+        .json(&serde_json::json!({ "provider": provider, "key": key }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy: begin an OAuth login. Progress streams back via `agent-event`
+/// (`auth_url`, `auth_status`, `auth_need_code`, `auth_done`, `auth_error`).
+#[tauri::command]
+async fn agent_auth_oauth_start(
+    webview: WebviewWindow,
+    provider: String,
+) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{}/auth/oauth/start", sidecar_base(port)))
+        .json(&serde_json::json!({ "provider": provider }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy: submit a pasted OAuth code to an in-flight login.
+#[tauri::command]
+async fn agent_auth_oauth_code(
+    webview: WebviewWindow,
+    code: String,
+) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{}/auth/oauth/code", sidecar_base(port)))
+        .json(&serde_json::json!({ "code": code }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy: disconnect a provider (clear its stored credentials).
+#[tauri::command]
+async fn agent_auth_logout(
+    webview: WebviewWindow,
+    provider: String,
+) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{}/auth/logout", sidecar_base(port)))
+        .json(&serde_json::json!({ "provider": provider }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy: stop a background task by id. Returns `{ message }`.
+#[tauri::command]
+async fn agent_kill_task(
+    webview: WebviewWindow,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{}/kill", sidecar_base(port)))
+        .json(&serde_json::json!({ "id": id }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
 /// Proxy: cancel the in-flight run.
 #[tauri::command]
-async fn agent_cancel(app: tauri::AppHandle) -> Result<(), String> {
-    let port = current_port(&app).ok_or("sidecar not ready")?;
+async fn agent_cancel(webview: WebviewWindow) -> Result<(), String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
     let client = reqwest::Client::new();
     client
         .post(format!("{}/cancel", sidecar_base(port)))
@@ -66,12 +203,287 @@ async fn agent_cancel(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Connect to the sidecar SSE stream and re-emit each frame to the webview as
-/// `agent-event`. Rust has no mixed-content restriction, so the webview never
-/// touches plain HTTP directly. Reconnects on stream end.
-fn start_event_bridge(app: tauri::AppHandle, port: u16) {
+/// Proxy: list workflow (prompt-template) slash commands.
+#[tauri::command]
+async fn agent_commands(webview: WebviewWindow) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let res = reqwest::get(format!("{}/commands", sidecar_base(port)))
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy: list models available to the logged-in providers.
+#[tauri::command]
+async fn agent_models(webview: WebviewWindow) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let res = reqwest::get(format!("{}/models", sidecar_base(port)))
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy: switch the active model. Returns the new provider/model + thinking state.
+#[tauri::command]
+async fn agent_switch_model(
+    webview: WebviewWindow,
+    model: String,
+) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{}/model", sidecar_base(port)))
+        .json(&serde_json::json!({ "model": model }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy: cycle the reasoning/thinking level to the next supported value.
+/// Returns the new `{ thinkingLevel, supportedThinkingLevels }`.
+#[tauri::command]
+async fn agent_cycle_thinking(webview: WebviewWindow) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{}/thinking", sidecar_base(port)))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy: read gg-app settings (e.g. the projects root folder).
+#[tauri::command]
+async fn agent_settings(webview: WebviewWindow) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let res = reqwest::get(format!("{}/settings", sidecar_base(port)))
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy: save gg-app settings.
+#[tauri::command]
+async fn agent_save_settings(
+    webview: WebviewWindow,
+    projects_root: String,
+) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{}/settings", sidecar_base(port)))
+        .json(&serde_json::json!({ "projectsRoot": projects_root }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy: create a new project folder under the configured projects root.
+/// Returns `{ path }` on success, or an error message on validation/conflict.
+#[tauri::command]
+async fn agent_create_project(
+    webview: WebviewWindow,
+    name: String,
+) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{}/create-project", sidecar_base(port)))
+        .json(&serde_json::json!({ "name": name }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = res.status();
+    let body = res
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        let msg = body
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("failed to create project");
+        return Err(msg.to_string());
+    }
+    Ok(body)
+}
+
+/// Proxy: discover known projects across ggcoder/Claude Code/Codex stores.
+#[tauri::command]
+async fn agent_projects(webview: WebviewWindow) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let res = reqwest::get(format!("{}/projects", sidecar_base(port)))
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Proxy: list recent sessions for a project cwd.
+#[tauri::command]
+async fn agent_sessions(webview: WebviewWindow, cwd: String) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("sidecar not ready")?;
+    let encoded = urlencoding(&cwd);
+    let res = reqwest::get(format!("{}/sessions?cwd={}", sidecar_base(port), encoded))
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
+/// Minimal percent-encoding for a filesystem path in a query string.
+fn urlencoding(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// App background (#111317) painted on the native window + webview BEFORE the
+/// first frame, so opening a new window never flashes white.
+const APP_BG: tauri::window::Color = tauri::window::Color(15, 17, 21, 255);
+
+/// Open enough new project windows to reach `count` total (each with its own
+/// agent sidecar at the default cwd), then tile the first `count` windows across
+/// the work area like macOS fill&arrange. Project selection per window happens
+/// in-app via the picker; windows open immediately.
+#[tauri::command]
+fn setup_windows(app: tauri::AppHandle, count: usize) -> Result<(), String> {
+    let existing = app.webview_windows().len();
+    let to_create = count.saturating_sub(existing);
+    for _ in 0..to_create {
+        let label = next_window_label(&app);
+        let win = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
+            .title("GG Coder")
+            .inner_size(1024.0, 720.0)
+            .min_inner_size(480.0, 360.0)
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .background_color(APP_BG)
+            // Let the webview's HTML drop handler receive files (Tauri's native
+            // drag-drop would otherwise intercept them).
+            .disable_drag_drop_handler()
+            .build()
+            .map_err(|e| e.to_string())?;
+        spawn_sidecar(app.clone(), label, default_cwd());
+        let _ = win.set_focus();
+    }
+    arrange_windows(&app, count);
+    Ok(())
+}
+
+/// Re-point THIS window's agent at a chosen project: kill its sidecar and spawn
+/// a fresh one at `cwd`, optionally resuming the session file `session_path`.
+/// The webview re-runs its ready flow against the new sidecar.
+#[tauri::command]
+fn select_project(
+    webview: WebviewWindow,
+    app: tauri::AppHandle,
+    cwd: String,
+    session_path: Option<String>,
+) -> Result<(), String> {
+    let label = webview.label().to_string();
+    {
+        let state: State<Sidecars> = app.state();
+        let mut map = state.map.lock().unwrap();
+        if let Some(inst) = map.get_mut(&label) {
+            inst.port = None;
+            if let Some(mut child) = inst.child.take() {
+                let _ = child.kill();
+            }
+        }
+    }
+    spawn_sidecar_with_session(app, label, PathBuf::from(cwd), session_path);
+    Ok(())
+}
+
+/// Allocate a unique `project-N` window label.
+fn next_window_label(app: &tauri::AppHandle) -> String {
+    let mut n = 1;
+    loop {
+        let label = format!("project-{n}");
+        if app.get_webview_window(&label).is_none() {
+            return label;
+        }
+        n += 1;
+    }
+}
+
+/// Tile the first `count` windows into a grid filling the primary work area:
+/// 2 → side-by-side halves, 4 → 2×2 quadrants, 6 → 3×2. "main" is placed first.
+fn arrange_windows(app: &tauri::AppHandle, count: usize) {
+    let mut windows: Vec<WebviewWindow> = app.webview_windows().into_values().collect();
+    // Deterministic order: main first, then project-N ascending.
+    windows.sort_by(|a, b| label_rank(a.label()).cmp(&label_rank(b.label())));
+    let tiles: Vec<WebviewWindow> = windows.into_iter().take(count).collect();
+    if tiles.is_empty() {
+        return;
+    }
+
+    let Some(monitor) = tiles[0].primary_monitor().ok().flatten() else {
+        return;
+    };
+    let area = monitor.work_area();
+    let (ox, oy) = (area.position.x, area.position.y);
+    let (w, h) = (area.size.width as i32, area.size.height as i32);
+
+    // Column count: 2-up → 2×1, 4-up → 2×2, 6-up → 3×2 (wide displays read
+    // better with 3 columns than 2). Falls back to 2 columns otherwise.
+    let cols: i32 = if count <= 2 {
+        count.max(1) as i32
+    } else if count >= 6 {
+        3
+    } else {
+        2
+    };
+    let rows: i32 = ((count as i32) + cols - 1) / cols;
+    let cell_w = w / cols;
+    let cell_h = h / rows;
+
+    for (i, win) in tiles.iter().enumerate() {
+        let col = (i as i32) % cols;
+        let row = (i as i32) / cols;
+        let x = ox + col * cell_w;
+        let y = oy + row * cell_h;
+        let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+        let _ = win.set_size(tauri::PhysicalSize::new(cell_w as u32, cell_h as u32));
+    }
+}
+
+fn label_rank(label: &str) -> (u8, u32) {
+    if label == "main" {
+        (0, 0)
+    } else if let Some(n) = label.strip_prefix("project-").and_then(|s| s.parse().ok()) {
+        (1, n)
+    } else {
+        (2, 0)
+    }
+}
+
+/// Connect to a window's sidecar SSE stream and re-emit each frame ONLY to that
+/// window (`emit_to` the window label) as `agent-event`, so windows never see
+/// each other's agent activity. Rust has no mixed-content restriction, so the
+/// webview never touches plain HTTP directly. Reconnects on stream end.
+fn start_event_bridge(app: tauri::AppHandle, label: String, port: u16) {
     tauri::async_runtime::spawn(async move {
         loop {
+            // Stop once this window's active sidecar port has moved on (project
+            // switch respawned the sidecar) or the window is gone — otherwise the
+            // old bridge would reconnect to a dead port forever.
+            {
+                let state: State<Sidecars> = app.state();
+                let map = state.map.lock().unwrap();
+                if map.get(&label).and_then(|i| i.port) != Some(port) {
+                    log::debug!("event bridge for {label}:{port} retired");
+                    return;
+                }
+            }
             let url = format!("{}/events", sidecar_base(port));
             match reqwest::get(&url).await {
                 Ok(res) => {
@@ -89,7 +501,11 @@ fn start_event_bridge(app: tauri::AppHandle, port: u16) {
                                     if let Ok(value) =
                                         serde_json::from_str::<serde_json::Value>(payload)
                                     {
-                                        let _ = app.emit("agent-event", value);
+                                        let _ = app.emit_to(
+                                            EventTarget::webview_window(label.clone()),
+                                            "agent-event",
+                                            value,
+                                        );
                                     }
                                 }
                             }
@@ -115,57 +531,87 @@ fn sidecar_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/ggcoder/dist/app-sidecar.js")
 }
 
-/// Working directory the agent operates in. Override with GG_APP_CWD; defaults
-/// to the workspace root for now (a project picker comes later).
-fn agent_cwd() -> PathBuf {
-    if let Ok(p) = std::env::var("GG_APP_CWD") {
-        return PathBuf::from(p);
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+/// Default working directory for the main window. Override with GG_APP_CWD;
+/// otherwise the workspace root. Additional windows pick their own project dir.
+/// Canonicalized so traversal segments (`../..`) don't leak into the session
+/// store path and surface as a stray ".." project in the picker.
+fn default_cwd() -> PathBuf {
+    let raw = match std::env::var("GG_APP_CWD") {
+        Ok(p) => PathBuf::from(p),
+        Err(_) => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."),
+    };
+    std::fs::canonicalize(&raw).unwrap_or(raw)
 }
 
-fn spawn_sidecar(app: tauri::AppHandle) {
+/// Spawn a Node agent sidecar bound to one window (`label`) + project `cwd`.
+/// Port/ready/error/event traffic is routed only to that window.
+fn spawn_sidecar(app: tauri::AppHandle, label: String, cwd: PathBuf) {
+    spawn_sidecar_with_session(app, label, cwd, None);
+}
+
+/// Like `spawn_sidecar`, but optionally resumes an existing session file.
+fn spawn_sidecar_with_session(
+    app: tauri::AppHandle,
+    label: String,
+    cwd: PathBuf,
+    session_path: Option<String>,
+) {
     let script = sidecar_path();
-    let cwd = agent_cwd();
     let node = std::env::var("GG_NODE_BIN").unwrap_or_else(|_| "node".into());
-    log::info!("spawning sidecar: {} (cwd={})", script.display(), cwd.display());
+    log::info!(
+        "spawning sidecar for {label}: {} (cwd={})",
+        script.display(),
+        cwd.display()
+    );
 
     let mut cmd = Command::new(node);
     cmd.arg(&script)
         // Port 0 → the OS assigns a free port, reported back via the
-        // GG_APP_LISTENING handshake. Avoids EADDRINUSE when a prior sidecar
-        // is orphaned by a dev hot-restart.
+        // GG_APP_LISTENING handshake. Avoids EADDRINUSE across windows.
         .env("GG_APP_PORT", "0")
         .env("GG_APP_CWD", &cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(sp) = session_path {
+        cmd.env("GG_APP_SESSION_ID", sp);
+    }
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             log::error!("failed to spawn sidecar: {e}");
-            let _ = app.emit("sidecar-error", format!("failed to spawn sidecar: {e}"));
+            let _ = app.emit_to(
+                EventTarget::webview_window(label.clone()),
+                "sidecar-error",
+                format!("failed to spawn sidecar: {e}"),
+            );
             return;
         }
     };
 
     if let Some(stdout) = child.stdout.take() {
         let app2 = app.clone();
+        let label2 = label.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(Result::ok) {
                 if let Some(rest) = line.strip_prefix("GG_APP_LISTENING ") {
                     if let Ok(port) = rest.trim().parse::<u16>() {
-                        log::info!("sidecar listening on port {port}");
+                        log::info!("sidecar for {label2} listening on port {port}");
                         {
-                            let state: State<Sidecar> = app2.state();
-                            *state.port.lock().unwrap() = Some(port);
+                            let state: State<Sidecars> = app2.state();
+                            let mut map = state.map.lock().unwrap();
+                            map.entry(label2.clone()).or_default().port = Some(port);
                         }
-                        start_event_bridge(app2.clone(), port);
-                        let _ = app2.emit("sidecar-ready", port);
+                        start_event_bridge(app2.clone(), label2.clone(), port);
+                        let _ = app2.emit_to(
+                            EventTarget::webview_window(label2.clone()),
+                            "sidecar-ready",
+                            port,
+                        );
                     }
                 } else {
-                    log::debug!("[sidecar] {line}");
+                    log::debug!("[sidecar:{label2}] {line}");
                 }
             }
         });
@@ -173,25 +619,32 @@ fn spawn_sidecar(app: tauri::AppHandle) {
 
     if let Some(stderr) = child.stderr.take() {
         let app3 = app.clone();
+        let label3 = label.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines().map_while(Result::ok) {
-                log::error!("[sidecar:stderr] {line}");
+                log::error!("[sidecar:{label3}:stderr] {line}");
                 if line.starts_with("GG_APP_FATAL") {
-                    let _ = app3.emit("sidecar-error", line);
+                    let _ = app3.emit_to(
+                        EventTarget::webview_window(label3.clone()),
+                        "sidecar-error",
+                        line,
+                    );
                 }
             }
         });
     }
 
-    let state: State<Sidecar> = app.state();
-    *state.child.lock().unwrap() = Some(child);
+    let state: State<Sidecars> = app.state();
+    let mut map = state.map.lock().unwrap();
+    map.entry(label).or_default().child = Some(child);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
@@ -205,21 +658,47 @@ pub fn run() {
                 ))
                 .build(),
         )
-        .manage(Sidecar::default())
+        .manage(Sidecars::default())
         .invoke_handler(tauri::generate_handler![
             sidecar_port,
             agent_state,
             agent_prompt,
-            agent_cancel
+            agent_cancel,
+            agent_new_session,
+            agent_history,
+            agent_auth_status,
+            agent_auth_apikey,
+            agent_auth_oauth_start,
+            agent_auth_oauth_code,
+            agent_auth_logout,
+            agent_kill_task,
+            agent_cycle_thinking,
+            agent_models,
+            agent_switch_model,
+            agent_commands,
+            setup_windows,
+            select_project,
+            agent_projects,
+            agent_sessions,
+            agent_settings,
+            agent_save_settings,
+            agent_create_project
         ])
         .setup(|app| {
-            spawn_sidecar(app.handle().clone());
+            // The config's main window gets its sidecar at the default cwd.
+            spawn_sidecar(app.handle().clone(), "main".into(), default_cwd());
             Ok(())
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                let state: State<Sidecar> = window.state();
-                let child = state.child.lock().unwrap().take();
+                // Kill only THIS window's sidecar so other projects keep running.
+                let state: State<Sidecars> = window.state();
+                let child = state
+                    .map
+                    .lock()
+                    .unwrap()
+                    .remove(window.label())
+                    .and_then(|mut i| i.child.take());
                 if let Some(mut child) = child {
                     let _ = child.kill();
                 }

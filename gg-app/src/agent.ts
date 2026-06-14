@@ -4,12 +4,40 @@
 //   - invoke("agent_state" | "agent_prompt" | "agent_cancel")
 //   - listen("agent-event")  ← forwarded SSE frames
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { error as logError, info as logInfo } from "@tauri-apps/plugin-log";
+
+// Per-window event bus. The Rust side emits agent traffic with `emit_to` the
+// specific window label, so each window must listen on ITS OWN webview target —
+// a global `listen` (target "Any") would never receive window-scoped events.
+// This is what keeps multiple project windows fully isolated.
+const appWindow = getCurrentWebviewWindow();
+
+/** This webview's window label (`main` for the first window, `project-N` for
+ *  windows opened via the Windows button). */
+export const windowLabel = appWindow.label;
+
+/** True for secondary windows opened via the Windows button (not the main one). */
+export const isSecondaryWindow = appWindow.label !== "main";
+
+/** Set the native (macOS overlay) window title bar text for THIS window. */
+export function setWindowTitle(title: string): void {
+  void appWindow.setTitle(title).catch(() => {});
+}
 
 export interface SidecarEvent {
   type: string;
   data: unknown;
+}
+
+/** A background process (bash run_in_background), mirrored from the sidecar. */
+export interface BackgroundTask {
+  id: string;
+  pid: number;
+  command: string;
+  startedAt: number;
+  /** null while running; a number once the process has exited. */
+  exitCode: number | null;
 }
 
 export interface AgentState {
@@ -17,16 +45,79 @@ export interface AgentState {
   model: string;
   cwd: string;
   running: boolean;
+  /** Current reasoning level, or null when thinking is off. May be absent on
+   * frames from older sidecars / partial model_change spreads. */
+  thinkingLevel?: string | null;
+  /** Levels this provider/model supports, in cycle order. May be absent. */
+  supportedThinkingLevels?: string[];
+  /** True while the agent is in read-only plan mode. */
+  planMode?: boolean;
+  /** Token budget for the active model — denominator for the context meter. */
+  contextWindow?: number;
+  /** Current git branch of the project cwd, or null when not a repo. */
+  gitBranch?: string | null;
+  /** Live background tasks (footer indicator). */
+  tasks?: BackgroundTask[];
+}
+
+export interface ThinkingState {
+  thinkingLevel: string | null;
+  supportedThinkingLevels: string[];
+}
+
+export interface ModelOption {
+  id: string;
+  name: string;
+  provider: string;
+}
+
+export interface SlashCommand {
+  name: string;
+  aliases: string[];
+  description: string;
+  /** "built-in" prompt template or a user ".gg/commands" custom command. */
+  source?: "built-in" | "custom";
+}
+
+export interface DiscoveredProject {
+  name: string;
+  path: string;
+  lastActiveDisplay: string;
+  sources: string[];
+}
+
+export interface RecentSession {
+  id: string;
+  path: string;
+  preview: string;
+  lastActiveDisplay: string;
+  messageCount: number;
+}
+
+export interface SwitchModelResult extends ThinkingState {
+  provider: string;
+  model: string;
 }
 
 export async function getState(): Promise<AgentState> {
   return invoke<AgentState>("agent_state");
 }
 
-export async function sendPrompt(text: string): Promise<void> {
-  await logInfo(`prompt: ${text.slice(0, 80)}`);
+/** A chat-input attachment (image / video / other file) sent with a prompt. */
+export interface Attachment {
+  kind: "image" | "video" | "file";
+  name: string;
+  mediaType: string;
+  /** base64 with NO data: prefix. */
+  data: string;
+}
+
+export async function sendPrompt(text: string, attachments: Attachment[] = []): Promise<void> {
+  await logInfo(
+    `prompt: ${text.slice(0, 80)}${attachments.length ? ` (+${attachments.length} att)` : ""}`,
+  );
   try {
-    await invoke("agent_prompt", { text });
+    await invoke("agent_prompt", { text, attachments });
   } catch (e) {
     await logError(`agent_prompt failed: ${String(e)}`);
     throw e;
@@ -41,6 +132,210 @@ export async function cancel(): Promise<void> {
   }
 }
 
+/** A resumed transcript entry (user or assistant text) for hydration. When
+ *  `hook` is set, this user message is an injected self-correction hook prompt
+ *  and should render as the short hook notice, not the raw prompt body. */
+export interface HistoryEntry {
+  role: "user" | "assistant";
+  text: string;
+  hook?: "ideal" | "loop_break" | "regrounding" | null;
+}
+
+/** Fetch the resumed session's prior messages so the transcript can hydrate. */
+export async function listHistory(): Promise<HistoryEntry[]> {
+  try {
+    const res = await invoke<{ history: HistoryEntry[] }>("agent_history");
+    return res.history ?? [];
+  } catch (e) {
+    await logError(`agent_history failed: ${String(e)}`);
+    return [];
+  }
+}
+
+// ── Provider auth (login) ──────────────────────────────────
+export type AuthMethod = "oauth" | "apikey";
+
+export interface AuthProvider {
+  value: string;
+  label: string;
+  description: string;
+  methods: AuthMethod[];
+  apiKeyLabel?: string;
+  apiKeyBaseUrl?: string;
+  /** Live connection status from ~/.gg/auth.json. */
+  connected: boolean;
+}
+
+/** List providers with their supported auth methods + live connection status. */
+export async function authStatus(): Promise<AuthProvider[]> {
+  try {
+    const res = await invoke<{ providers: AuthProvider[] }>("agent_auth_status");
+    return res.providers ?? [];
+  } catch (e) {
+    await logError(`agent_auth_status failed: ${String(e)}`);
+    return [];
+  }
+}
+
+/** Store an API key for a provider. Throws with a user-facing message on error. */
+export async function authApiKey(provider: string, key: string): Promise<void> {
+  await invoke("agent_auth_apikey", { provider, key });
+}
+
+/** Begin an OAuth login; progress arrives via subscribe() auth_* events. */
+export async function authOAuthStart(provider: string): Promise<void> {
+  await invoke("agent_auth_oauth_start", { provider });
+}
+
+/** Submit a pasted OAuth code to an in-flight login. */
+export async function authOAuthCode(code: string): Promise<void> {
+  await invoke("agent_auth_oauth_code", { code });
+}
+
+/** Disconnect a provider (clear stored credentials). */
+export async function authLogout(provider: string): Promise<void> {
+  await invoke("agent_auth_logout", { provider });
+}
+
+/** Start a fresh session (clears history) for this window's current project. */
+export async function newSession(): Promise<void> {
+  try {
+    await invoke("agent_new_session");
+  } catch (e) {
+    await logError(`agent_new_session failed: ${String(e)}`);
+    throw e;
+  }
+}
+
+/** Stop a background task by id. Returns the sidecar's status message, if any. */
+export async function killTask(id: string): Promise<string | null> {
+  try {
+    const res = await invoke<{ message?: string }>("agent_kill_task", { id });
+    return res.message ?? null;
+  } catch (e) {
+    await logError(`agent_kill_task failed: ${String(e)}`);
+    return null;
+  }
+}
+
+/** Cycle the reasoning/thinking level to the next supported value (or off). */
+export async function cycleThinking(): Promise<ThinkingState | null> {
+  try {
+    return await invoke<ThinkingState>("agent_cycle_thinking");
+  } catch (e) {
+    await logError(`agent_cycle_thinking failed: ${String(e)}`);
+    return null;
+  }
+}
+
+/** List workflow (prompt-template) slash commands the agent can run. */
+export async function listCommands(): Promise<SlashCommand[]> {
+  try {
+    const res = await invoke<{ commands: SlashCommand[] }>("agent_commands");
+    return res.commands ?? [];
+  } catch (e) {
+    await logError(`agent_commands failed: ${String(e)}`);
+    return [];
+  }
+}
+
+/** List models available to the logged-in providers. */
+export async function listModels(): Promise<ModelOption[]> {
+  try {
+    const res = await invoke<{ models: ModelOption[] }>("agent_models");
+    return res.models ?? [];
+  } catch (e) {
+    await logError(`agent_models failed: ${String(e)}`);
+    return [];
+  }
+}
+
+/** Switch the active model by id. Returns the new provider/model + thinking state. */
+export async function switchModel(model: string): Promise<SwitchModelResult | null> {
+  try {
+    return await invoke<SwitchModelResult>("agent_switch_model", { model });
+  } catch (e) {
+    await logError(`agent_switch_model failed: ${String(e)}`);
+    return null;
+  }
+}
+
+/** App settings. `configured` is true only when the user explicitly set a
+ * projects root (not the default fallback). */
+export interface AppSettings {
+  projectsRoot: string;
+  configured: boolean;
+}
+
+/** Read gg-app settings (projects root folder + whether it was explicitly set). */
+export async function getSettings(): Promise<AppSettings | null> {
+  try {
+    return await invoke<AppSettings>("agent_settings");
+  } catch (e) {
+    await logError(`agent_settings failed: ${String(e)}`);
+    return null;
+  }
+}
+
+/** Save gg-app settings. */
+export async function saveSettings(projectsRoot: string): Promise<void> {
+  await invoke("agent_save_settings", { projectsRoot });
+}
+
+/**
+ * Create a new project folder (lowercase/dashes name) under the configured
+ * projects root. Returns the created absolute path. Throws with a user-facing
+ * message on invalid name / conflict.
+ */
+export async function createProject(name: string): Promise<string> {
+  const res = await invoke<{ path: string }>("agent_create_project", { name });
+  return res.path;
+}
+
+/** Discover known projects (ggcoder + Claude Code + Codex), most recent first. */
+export async function listProjects(): Promise<DiscoveredProject[]> {
+  try {
+    const res = await invoke<{ projects: DiscoveredProject[] }>("agent_projects");
+    return res.projects ?? [];
+  } catch (e) {
+    await logError(`agent_projects failed: ${String(e)}`);
+    return [];
+  }
+}
+
+/** List the latest sessions for a project cwd (newest first, with previews). */
+export async function listSessions(cwd: string): Promise<RecentSession[]> {
+  try {
+    const res = await invoke<{ sessions: RecentSession[] }>("agent_sessions", { cwd });
+    return res.sessions ?? [];
+  } catch (e) {
+    await logError(`agent_sessions failed: ${String(e)}`);
+    return [];
+  }
+}
+
+/**
+ * Re-point this window's agent at a project: respawns the sidecar at `cwd`,
+ * optionally resuming `sessionPath`. The caller re-runs the ready flow after.
+ */
+export async function selectProject(cwd: string, sessionPath?: string): Promise<void> {
+  await invoke("select_project", { cwd, sessionPath: sessionPath ?? null });
+}
+
+/**
+ * Open enough new project windows (each with its own agent) to reach `count`
+ * total, then tile the first `count` windows into a 2- or 4-up grid filling the
+ * screen work area.
+ */
+export async function setupWindows(count: number): Promise<void> {
+  try {
+    await invoke("setup_windows", { count });
+  } catch (e) {
+    await logError(`setup_windows failed: ${String(e)}`);
+    throw e;
+  }
+}
+
 // Single Tauri listener for the whole app, fanned out to local subscribers.
 // Registering the OS-level listener once at module scope (not per React mount)
 // eliminates the StrictMode/HMR double-mount race where two async `listen()`
@@ -51,7 +346,7 @@ let tauriListenerStarted = false;
 function ensureTauriListener(): void {
   if (tauriListenerStarted) return;
   tauriListenerStarted = true;
-  void listen<SidecarEvent>("agent-event", (e) => {
+  void appWindow.listen<SidecarEvent>("agent-event", (e) => {
     for (const fn of localSubscribers) fn(e.payload);
   });
 }
@@ -85,7 +380,7 @@ export async function waitForReady(): Promise<void> {
       clearInterval(poll);
       resolve();
     };
-    listen<number>("sidecar-ready", finish).catch(() => {});
+    appWindow.listen<number>("sidecar-ready", finish).catch(() => {});
     const poll = setInterval(() => {
       void invoke<number | null>("sidecar_port").then((p) => {
         if (typeof p === "number") finish();
