@@ -1,5 +1,24 @@
 # @kenkaiiii/ggcoder
 
+## 4.10.2
+
+### Patch Changes
+
+- Fix duplicated transcript text and random whitespace in the terminal UI. The
+  bottom-pinned shrink-backfill repaint reconstructed the on-screen transcript by
+  re-serializing history (markdown re-render + wrapAnsi); when a row's visual
+  width diverged from the terminal (wide emoji, bold/italic markdown, CJK) the
+  rebuilt row count disagreed with ink's frame math, causing the repaint to
+  overlap still-present rows (duplicate lines) or pad short with blank rows
+  (injected whitespace). It fired on nearly every turn. The repaint is now
+  disabled by default — ink falls back to a cursor-up pad-consume that never
+  repaints content — eliminating both failure modes. Opt back in with
+  `GG_SHRINK_BACKFILL=1`. Also adds `[scrollback]` debug logging across every
+  native-scrollback write path.
+  - @kenkaiiii/gg-ai@4.10.2
+  - @kenkaiiii/gg-agent@4.10.2
+  - @kenkaiiii/gg-core@4.10.2
+
 ## 4.10.1
 
 ### Patch Changes

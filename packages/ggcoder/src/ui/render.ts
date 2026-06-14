@@ -1,5 +1,6 @@
 import React from "react";
 import wrapAnsi from "wrap-ansi";
+import { log } from "@kenkaiiii/gg-core";
 import { render, type Instance as InkInstance } from "ink";
 import type { Message, Provider, ThinkingLevel } from "@kenkaiiii/gg-ai";
 import type { AgentTool } from "@kenkaiiii/gg-agent";
@@ -471,9 +472,25 @@ export async function renderApp(config: RenderAppConfig): Promise<void> {
   // and paints them into the vacated space, restoring the pre-menu screen
   // exactly. Serializes from sessionStore.history with a throwaway printer
   // (force: dedup state must not be touched); called rarely (menu close).
+  //
+  // DISABLED BY DEFAULT. This repaint reconstructs the physical screen by
+  // RE-SERIALIZING history (markdown re-render + wrapAnsi). When a row's visual
+  // width diverges between that reconstruction and the terminal — wide emoji
+  // (✅), bold/italic markdown, CJK — the rebuilt row count disagrees with
+  // ink's `needRows`/`linesAboveFrame` math, so the `eraseDown + backfillText`
+  // repaint OVERLAPS still-present rows (duplicate lines) or pads short with
+  // blank rows (injected whitespace). It fires on nearly every turn. Without a
+  // provider installed, ink falls back to a cursor-up pad-consume that never
+  // repaints content — eliminating both failure modes. Opt back in (to debug or
+  // revisit) with GG_SHRINK_BACKFILL=1.
+  const shrinkBackfillEnabled = process.env.GG_SHRINK_BACKFILL === "1";
   const buildShrinkBackfill = (needRows: number): string | undefined => {
     const history = sessionStore.history;
     if (needRows <= 0 || !history || history.length === 0) return undefined;
+    log("INFO", "scrollback", "shrink-backfill invoked", {
+      needRows,
+      historyItems: history.length,
+    });
     // Inline images can't be faithfully reconstructed by this text-only repaint:
     // a graphics escape carries its base64 payload with zero newlines but many
     // visual rows, so wrapAnsi hard-wraps the payload into literal base64 text
@@ -481,7 +498,10 @@ export async function renderApp(config: RenderAppConfig): Promise<void> {
     // fall back to its non-erasing cursor-up pad consume, which reclaims the gap
     // WITHOUT an eraseDown repaint — leaving the already-drawn image untouched on
     // screen instead of wiping it or shoving the transcript out of alignment.
-    if (history.some(itemHasImagePreviews)) return undefined;
+    if (history.some(itemHasImagePreviews)) {
+      log("INFO", "scrollback", "shrink-backfill bail", { reason: "image-previews" });
+      return undefined;
+    }
     let collected = "";
     try {
       createTerminalHistoryPrinter().print(
@@ -496,6 +516,7 @@ export async function renderApp(config: RenderAppConfig): Promise<void> {
         },
         {
           force: true,
+          reason: "shrink-backfill",
           write: (data: string) => {
             collected += data;
           },
@@ -507,10 +528,25 @@ export async function renderApp(config: RenderAppConfig): Promise<void> {
     if (!collected) return undefined;
     const columnsNow = Math.max(40, process.stdout.columns ?? 80);
     const wrapped = wrapAnsi(collected.replace(/\n$/, ""), columnsNow, { trim: false, hard: true });
-    const lines = wrapped.split("\n").slice(-needRows);
+    const allRows = wrapped.split("\n");
+    const lines = allRows.slice(-needRows);
     // Transcript shorter than the vacated space: blank-fill the top so the
-    // row count still matches and the footer stays put.
-    while (lines.length < needRows) lines.unshift("");
+    // row count still matches and the footer stays put. Each blank line here
+    // is a row of on-screen whitespace injected above the transcript tail —
+    // logging blankPad surfaces the "random whitespace" symptom directly.
+    const tailRows = lines.length;
+    let blankPad = 0;
+    while (lines.length < needRows) {
+      lines.unshift("");
+      blankPad++;
+    }
+    log("INFO", "scrollback", "shrink-backfill built", {
+      needRows,
+      reconstructedRows: allRows.length,
+      tailRows,
+      blankPad,
+      columns: columnsNow,
+    });
     return `${lines.join("\n")}\n`;
   };
 
@@ -582,6 +618,16 @@ export async function renderApp(config: RenderAppConfig): Promise<void> {
   function resetUI(options?: ResetUIOptions): void {
     const old = ref.instance;
     if (!old) return;
+    log("INFO", "scrollback", "resetUI", {
+      wipeSession: String(Boolean(options?.wipeSession)),
+      resizeRedraw: String(Boolean(options?.resizeRedraw)),
+      historyOverride: String(options?.history !== undefined),
+      messagesOverride: String(options?.messages !== undefined),
+      pendingAction: String(Boolean(options?.pendingAction)),
+      sessionHistoryItems: sessionStore.history.length,
+      clearMode: getResetClearMode(options),
+      fullscreen: String(fullscreen),
+    });
 
     if (options?.wipeSession) {
       // Wipe everything session-scoped FIRST. Other options below can then
@@ -628,7 +674,7 @@ export async function renderApp(config: RenderAppConfig): Promise<void> {
       process.stdout.write(VIEWPORT_CLEAR);
       ref.instance = render(buildElement(), inkOptions);
       ref.instance.setFrameAnchorActive?.(frameAnchorActive);
-      ref.instance.setFrameShrinkBackfill?.(buildShrinkBackfill);
+      if (shrinkBackfillEnabled) ref.instance.setFrameShrinkBackfill?.(buildShrinkBackfill);
       flushPreMountHistory();
       return;
     }
@@ -638,24 +684,28 @@ export async function renderApp(config: RenderAppConfig): Promise<void> {
     // Other non-wipe remounts keep scrollback and only clear the live viewport.
     process.stdout.write(getResetClearMode(options) === "screen" ? SCREEN_CLEAR : VIEWPORT_CLEAR);
     if (options?.resizeRedraw && sessionStore.history.length > 0) {
-      terminalHistoryPrinter.print(sessionStore.history, {
-        theme: loadTheme(currentThemeName),
-        columns: Math.max(40, process.stdout.columns ?? 80),
-        version: config.version,
-        model: runtimeState.model,
-        provider: runtimeState.provider,
-        cwd: config.cwd,
-      });
+      terminalHistoryPrinter.print(
+        sessionStore.history,
+        {
+          theme: loadTheme(currentThemeName),
+          columns: Math.max(40, process.stdout.columns ?? 80),
+          version: config.version,
+          model: runtimeState.model,
+          provider: runtimeState.provider,
+          cwd: config.cwd,
+        },
+        { reason: "resize-redraw" },
+      );
     }
     ref.instance = render(buildElement(), inkOptions);
     ref.instance.setFrameAnchorActive?.(frameAnchorActive);
-    ref.instance.setFrameShrinkBackfill?.(buildShrinkBackfill);
+    if (shrinkBackfillEnabled) ref.instance.setFrameShrinkBackfill?.(buildShrinkBackfill);
     flushPreMountHistory();
   }
 
   ref.instance = render(buildElement(), inkOptions);
   ref.instance.setFrameAnchorActive?.(frameAnchorActive);
-  ref.instance.setFrameShrinkBackfill?.(buildShrinkBackfill);
+  if (shrinkBackfillEnabled) ref.instance.setFrameShrinkBackfill?.(buildShrinkBackfill);
   flushPreMountHistory();
 
   // Terminal resize → full unmount/remount. Completed transcript rows are real
@@ -677,6 +727,11 @@ export async function renderApp(config: RenderAppConfig): Promise<void> {
       // agent dies on maximize. Skip the unmount in that case. Flag
       // pendingResetUI so App.tsx fires a deferred resetUI the moment the
       // agent goes idle, fixing any live-area drift that accumulated.
+      log("INFO", "scrollback", "resize fired", {
+        agentRunning: String(Boolean(sessionStore.isAgentRunning)),
+        columns: process.stdout.columns ?? 0,
+        rows: process.stdout.rows ?? 0,
+      });
       if (sessionStore.isAgentRunning) {
         sessionStore.pendingResetUI = true;
         return;

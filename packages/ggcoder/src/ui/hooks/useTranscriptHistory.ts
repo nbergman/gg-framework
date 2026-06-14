@@ -19,7 +19,7 @@ interface TranscriptHistoryPrinter<TItem extends TranscriptHistoryItem> {
   print(
     items: readonly TItem[],
     context: TerminalHistoryContext,
-    options?: { force?: boolean; write?: (data: string) => void },
+    options?: { force?: boolean; write?: (data: string) => void; reason?: string },
   ): void;
   clear(): void;
 }
@@ -50,7 +50,10 @@ interface UseTranscriptHistoryOptions<TItem extends TranscriptHistoryItem> {
 export interface UseTranscriptHistoryResult<TItem extends TranscriptHistoryItem> {
   pendingHistoryFlushRef: React.RefObject<TItem[]>;
   streamedAssistantFlushRef: React.RefObject<{ flushedChars: number; text: string }>;
-  printHistoryItems: (items: readonly TItem[], options?: { force?: boolean }) => void;
+  printHistoryItems: (
+    items: readonly TItem[],
+    options?: { force?: boolean; reason?: string },
+  ) => void;
   queueFlush: (items: TItem[]) => void;
   finalizeSubmittedUserItem: (item: TItem, deferredLiveItems?: readonly TItem[]) => void;
   clearPendingHistory: () => void;
@@ -86,9 +89,10 @@ export function useTranscriptHistory<TItem extends TranscriptHistoryItem = Compl
   }, [terminalHistoryContext]);
 
   const printHistoryItems = useCallback(
-    (items: readonly TItem[], options?: { force?: boolean }) => {
+    (items: readonly TItem[], options?: { force?: boolean; reason?: string }) => {
       if (!terminalHistoryPrinter || items.length === 0) return;
       terminalHistoryPrinter.print(items, terminalHistoryContextRef.current, {
+        reason: options?.reason ?? "print",
         ...options,
         write: enqueueStdout ?? writeStdout,
       });
@@ -106,7 +110,7 @@ export function useTranscriptHistory<TItem extends TranscriptHistoryItem = Compl
       // terminal write), so the bytes ride the very next frame write — the one
       // produced by the batched setLiveItems/generation updates below, which is
       // also the write that shrinks the live frame. One write = no footer jump.
-      printHistoryItems(flushed);
+      printHistoryItems(flushed, { reason: "flush" });
       const sessionPath = sessionPathRef.current;
       const sessionManager = sessionManagerRef.current;
       if (sessionPath && sessionManager) {
@@ -167,7 +171,7 @@ export function useTranscriptHistory<TItem extends TranscriptHistoryItem = Compl
   );
 
   useEffect(() => {
-    printHistoryItems(history);
+    printHistoryItems(history, { reason: "history-effect" });
   }, [history, printHistoryItems]);
 
   useLayoutEffect(() => {
