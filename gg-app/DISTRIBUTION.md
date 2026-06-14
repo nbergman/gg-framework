@@ -55,11 +55,26 @@ pnpm --filter @kenkaiiii/ggcoder build      # produce dist/app-sidecar.js
 pnpm --filter gg-app stage:node             # download + stage the Node runtime
 pnpm --filter gg-app bundle:sidecar         # esbuild bundle + copy externals
 node gg-app/scripts/smoke-sidecar.mjs       # boot bundled node + sidecar, hit /state
-pnpm --filter gg-app tauri build            # full installer (re-runs the above)
+pnpm --filter gg-app tauri build            # full installer
 ```
 
-`tauri build`'s `beforeBuildCommand` is `pnpm build && pnpm prebundle`, so it
-always restages the runtime + sidecar.
+Stage the runtime + sidecar **before** `tauri build` (as above). The Tauri
+`beforeBuildCommand` is only `pnpm build` (the frontend) — it deliberately does
+NOT run `prebundle`, because on macOS the nested binaries are code-signed
+between staging and bundling (see below); re-staging inside the build would
+overwrite those signatures with unsigned files.
+
+### macOS code signing of nested binaries
+
+Apple notarization requires every embedded Mach-O (the staged Node runtime and
+the sidecar's native addons: sharp, libvips, onnxruntime, fsevents) to carry a
+Developer ID signature + secure timestamp + hardened runtime. Tauri signs the
+app shell and the `externalBin` it knows about, but not arbitrary
+`bundle.resources`, so the release workflow runs `scripts/sign-nested-macos.sh`
+between cert import and `tauri build` to deep-sign them. The app shell + Node
+runtime get the JIT / library-loading entitlements in
+`src-tauri/entitlements.plist` (referenced from `bundle.macOS.entitlements`) —
+without them a hardened-runtime Node crashes at launch.
 
 ## Window chrome
 

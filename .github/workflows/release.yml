@@ -110,6 +110,19 @@ jobs:
           security find-identity -v -p codesigning build.keychain
           rm -f certificate.p12
 
+      # Sign the nested Mach-O binaries Tauri won't touch (the staged Node
+      # runtime + the sidecar's native addons under bundle.resources) with
+      # Developer ID + hardened runtime + secure timestamp, so notarization of
+      # the assembled app passes. Runs after the cert is in the keychain and
+      # before tauri-action assembles + notarizes the bundle.
+      - name: Sign nested bundle binaries (macOS)
+        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
+        run: |
+          bash gg-app/scripts/sign-nested-macos.sh \
+            "${{ secrets.APPLE_SIGNING_IDENTITY }}" \
+            gg-app/src-tauri/binaries \
+            gg-app/src-tauri/sidecar
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
