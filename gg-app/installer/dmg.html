@@ -4,10 +4,13 @@
   downscaled by build-art.mjs to the REQUIRED 660×400 — Finder maps 1 background
   pixel → 1 window point and does NOT scale, so the final asset must be exactly
   the window's point size.
+
   Finder draws the icon labels ("GG Coder", "Applications") itself, in BLACK,
-  regardless of the user's Dark Mode. So each icon sits on a LIGHT rounded tile
-  tall enough to also sit under its label — guaranteeing readable black text on
-  an otherwise dark, on-brand background.
+  and macOS exposes no way to recolor them (create-dmg, which Tauri uses, only
+  controls the background image + icon positions). So this background is LIGHT —
+  black labels read naturally, no shelves/pills/tiles needed. The brand still
+  comes through via the gradient ASCII wordmark and the accent arrow.
+
   Icon centers: app at 2×(360,340)=(180,170), Applications at 2×(960,340)=
   (480,170) — matching appPosition / applicationFolderPosition in
   tauri.conf.json. Regenerate with: pnpm --filter gg-app installer:art
@@ -17,9 +20,9 @@
     <meta charset="utf-8" />
     <style>
       :root {
-        --text: #f4f6f8;
-        --muted: #aeb6c4;
-        --dim: #6b7482;
+        --ink: #1c2230; /* primary text on light */
+        --muted: #5b6678; /* subtitle */
+        --dim: #8b94a4; /* footer */
       }
       * {
         margin: 0;
@@ -37,33 +40,35 @@
         position: relative;
         width: 1320px;
         height: 800px;
+        /* Soft, cool off-white with faint brand tints in the corners. */
         background:
           radial-gradient(
-            120% 90% at 50% -10%,
-            rgba(77, 157, 255, 0.18),
+            110% 80% at 50% -10%,
+            rgba(77, 157, 255, 0.1),
             transparent 55%
           ),
           radial-gradient(
             90% 70% at 50% 120%,
-            rgba(155, 140, 247, 0.14),
+            rgba(155, 140, 247, 0.1),
             transparent 60%
           ),
-          linear-gradient(180deg, #12141b 0%, #0d0f14 100%);
-        color: var(--text);
+          linear-gradient(180deg, #f4f6fb 0%, #e9edf5 100%);
+        color: var(--ink);
       }
+      /* Faint grid texture for a subtle techy feel, very low contrast. */
       .stage::before {
         content: "";
         position: absolute;
         inset: 0;
         background-image:
-          linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+          linear-gradient(rgba(28, 34, 48, 0.04) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(28, 34, 48, 0.04) 1px, transparent 1px);
         background-size: 44px 44px;
-        mask-image: radial-gradient(120% 80% at 50% 25%, #000 30%, transparent 80%);
+        mask-image: radial-gradient(120% 80% at 50% 25%, #000 25%, transparent 80%);
       }
       .header {
         position: absolute;
-        top: 56px;
+        top: 60px;
         left: 0;
         right: 0;
         text-align: center;
@@ -74,16 +79,16 @@
       .ascii {
         display: inline-block;
         font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-        font-size: 22px;
+        font-size: 15px;
         line-height: 1.05;
         white-space: pre;
         background: linear-gradient(
           100deg,
-          #4d9dff 0%,
-          #6f8ff7 25%,
-          #9b8cf7 50%,
-          #6f8ff7 75%,
-          #4d9dff 100%
+          #2f7be0 0%,
+          #5566d8 25%,
+          #7a5fe0 50%,
+          #5566d8 75%,
+          #2f7be0 100%
         );
         -webkit-background-clip: text;
         background-clip: text;
@@ -95,42 +100,15 @@
         color: var(--muted);
         letter-spacing: 0.01em;
       }
-      /*
-        Finder draws each icon's label in BLACK, below the icon. The icons
-        themselves read fine on the dark background, so instead of large tiles
-        we place a small light "pill" behind ONLY the label text. 2× icon
-        centers: (360,340) & (960,340); the label sits ~150px below center
-        (icon is 128px tall at 1× → ~256px at 2×), so the pill is centered at
-        y≈488 (2×).
-      */
-      .pill {
-        position: absolute;
-        width: 240px;
-        height: 64px;
-        top: 456px; /* 488 - 32 */
-        border-radius: 32px;
-        background: rgba(233, 236, 243, 0.95);
-        border: 1px solid rgba(255, 255, 255, 0.45);
-        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
-      }
-      .pill.app {
-        left: 240px;
-      } /* 360 - 120 */
-      .pill.apps {
-        left: 840px;
-      } /* 960 - 120 */
       .arrow {
         position: absolute;
         top: 322px;
-        left: 510px; /* between the two tiles */
+        left: 510px;
         width: 300px;
         height: 36px;
         display: flex;
         align-items: center;
         justify-content: center;
-      }
-      .arrow svg {
-        filter: drop-shadow(0 0 10px rgba(77, 157, 255, 0.35));
       }
       .footer {
         position: absolute;
@@ -156,19 +134,16 @@
         <div class="sub">Drag the app into your Applications folder</div>
       </div>
 
-      <div class="pill app"></div>
-      <div class="pill apps"></div>
-
       <div class="arrow">
         <svg width="300" height="36" viewBox="0 0 300 36" fill="none">
           <defs>
             <linearGradient id="ag" gradientUnits="userSpaceOnUse" x1="6" y1="0" x2="292" y2="0">
-              <stop offset="0" stop-color="#4d9dff" stop-opacity="0.65" />
-              <stop offset="1" stop-color="#9b8cf7" stop-opacity="1" />
+              <stop offset="0" stop-color="#2f7be0" stop-opacity="0.55" />
+              <stop offset="1" stop-color="#7a5fe0" stop-opacity="1" />
             </linearGradient>
           </defs>
           <line x1="6" y1="18" x2="272" y2="18" stroke="url(#ag)" stroke-width="4" stroke-linecap="round" />
-          <path d="M266 6 L292 18 L266 30" stroke="#9b8cf7" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+          <path d="M266 6 L292 18 L266 30" stroke="#7a5fe0" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none" />
         </svg>
       </div>
 
