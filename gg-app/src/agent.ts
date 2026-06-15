@@ -422,6 +422,16 @@ export async function setupWindows(count: number): Promise<void> {
   }
 }
 
+/** Open a single new project window (Cmd/Ctrl+N). Never re-tiles existing ones. */
+export async function newWindow(): Promise<void> {
+  try {
+    await invoke("new_window");
+  } catch (e) {
+    await logError(`new_window failed: ${String(e)}`);
+    throw e;
+  }
+}
+
 // Single Tauri listener for the whole app, fanned out to local subscribers.
 // Registering the OS-level listener once at module scope (not per React mount)
 // eliminates the StrictMode/HMR double-mount race where two async `listen()`

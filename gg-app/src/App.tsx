@@ -15,6 +15,7 @@ import {
   runTask,
   runAllTasks,
   deleteTask,
+  newWindow,
   subscribe,
   isSecondaryWindow,
   setWindowTitle,
@@ -295,7 +296,7 @@ function App(): React.ReactElement {
   // provider without re-subscribing the SSE listener on every state change.
   const stateRef = useRef<AgentState | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const streamingIdRef = useRef<number | null>(null);
   // Transcript id of the active sub-agent group for this run (null until the
   // first subagent spawns). Lets later parallel agents join the same in-chat
@@ -362,6 +363,27 @@ function App(): React.ReactElement {
     const inProject = !needsProject && !showPicker;
     setWindowTitle(inProject && sessionTitle ? sessionTitle : "GG Coder");
   }, [needsProject, showPicker, sessionTitle]);
+
+  // Auto-grow the chat textarea to fit its content (up to a CSS max-height,
+  // after which it scrolls). Runs whenever the input value changes.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [input]);
+
+  // Cmd+N (macOS) / Ctrl+N (Linux/Windows) opens a new project window.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key.toLowerCase() === "n" && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        void newWindow();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Focus the chat input whenever this window gains focus (or clicked anywhere),
   // so switching between project windows lands the cursor in the input without
@@ -1311,9 +1333,10 @@ function App(): React.ReactElement {
           <span className="prompt" style={{ color: theme.primary }}>
             {">"}
           </span>
-          <input
+          <textarea
             ref={inputRef}
             className="input"
+            rows={1}
             value={input}
             placeholder={
               running
@@ -1341,6 +1364,7 @@ function App(): React.ReactElement {
                 const cmd = slashMatches[clampedSlashIndex];
                 if (cmd) pickSlashCommand(cmd);
               } else if (e.key === "Enter" && !e.shiftKey) {
+                // Enter sends; Shift+Enter inserts a newline (textarea default).
                 e.preventDefault();
                 submit();
               } else if (e.key === "Escape") {

@@ -602,6 +602,18 @@ fn setup_windows(app: tauri::AppHandle, count: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// Open a single new project window with its own agent sidecar (default cwd) and
+/// focus it. Unlike `setup_windows`, this never re-tiles existing windows — it's
+/// the Cmd/Ctrl+N "new window" shortcut. Project selection happens per-window.
+#[tauri::command]
+fn new_window(app: tauri::AppHandle) -> Result<(), String> {
+    let label = next_window_label(&app);
+    let win = build_app_window(&app, &label)?;
+    spawn_sidecar(app.clone(), label, default_cwd());
+    let _ = win.set_focus();
+    Ok(())
+}
+
 /// Re-point THIS window's agent at a chosen project: kill its sidecar and spawn
 /// a fresh one at `cwd`, optionally resuming the session file `session_path`.
 /// The webview re-runs its ready flow against the new sidecar.
@@ -1016,6 +1028,7 @@ pub fn run() {
             agent_switch_model,
             agent_commands,
             setup_windows,
+            new_window,
             select_project,
             agent_projects,
             agent_sessions,

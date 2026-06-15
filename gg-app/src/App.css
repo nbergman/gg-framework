@@ -725,6 +725,16 @@ body {
      regardless of where it's rendered. */
   text-align: left;
 }
+/* Any scroll container inside a modal gets a thin, non-overlapping scrollbar so
+   the thumb never sits on top of the row content. */
+.modal ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.modal ::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
 .modal-title {
   font-size: 15px;
   font-weight: 600;
@@ -830,7 +840,19 @@ body {
      past the viewport; the actions row stays pinned below. */
   max-height: min(48vh, 360px);
   overflow-y: auto;
+  /* Reserve room for the scrollbar so the thumb never overlaps the row content
+     (run button / delete ×). `stable` keeps layout steady whether or not the
+     list overflows. */
+  scrollbar-gutter: stable;
+  padding-right: 4px;
   margin: 2px 0 14px;
+}
+.tasks-list::-webkit-scrollbar {
+  width: 8px;
+}
+.tasks-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
 }
 .tasks-item {
   display: flex;
@@ -1688,7 +1710,8 @@ body {
 }
 .inputrow {
   display: flex;
-  align-items: center;
+  /* Pin controls to the first line so they don't drift as the textarea grows. */
+  align-items: flex-start;
   gap: 8px;
 }
 
@@ -1877,6 +1900,7 @@ body {
 
 .input {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
   outline: none;
@@ -1884,6 +1908,21 @@ body {
   color: var(--user-text);
   font-family: var(--mono);
   font-size: 15px;
+  /* Auto-growing multi-line input: JS sets height to fit content; cap growth
+     here and scroll past the cap. No manual resize handle, wrap long lines. */
+  resize: none;
+  overflow-y: auto;
+  max-height: 40vh;
+  line-height: 1.5;
+  padding: 0;
+  margin: 0;
+}
+.input::-webkit-scrollbar {
+  width: 8px;
+}
+.input::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
 }
 
 .input::placeholder {
