@@ -31,6 +31,7 @@ import {
 import { ActivityBar, formatTokenCount } from "./ActivityBar";
 import { LiveToolPanel, type LiveToolEntry, LIVE_TOOL_PANEL_ROWS } from "./LiveToolPanel";
 import { SubAgentFeed, type SubAgentLine } from "./SubAgentFeed";
+import { CompactionNotice } from "./CompactionNotice";
 import { ModelMenu } from "./ModelMenu";
 import { SlashMenu } from "./SlashMenu";
 import { FileMentionMenu } from "./FileMentionMenu";
@@ -97,7 +98,16 @@ type Item =
   // A task kicked off from the Tasks modal (shown at the top of its session).
   | { kind: "task"; id: number; title: string }
   // Sub-agents delegated in a turn — a live, in-chat feed of each one's tools.
-  | { kind: "subagent_group"; id: number; agents: SubAgentLine[]; aborted?: boolean };
+  | { kind: "subagent_group"; id: number; agents: SubAgentLine[]; aborted?: boolean }
+  // Context compaction — shimmering "compacting…" while running, then a quiet
+  // "compacted · N → M messages" summary when done.
+  | {
+      kind: "compaction";
+      id: number;
+      status: "running" | "done";
+      originalCount?: number;
+      newCount?: number;
+    };
 
 export interface TranscriptImage {
   /** data: URL (base64) ready to drop into <img src>. */
@@ -319,6 +329,9 @@ function App(): React.ReactElement {
   // first subagent spawns). Lets later parallel agents join the same in-chat
   // feed instead of each opening a fresh block.
   const subagentGroupIdRef = useRef<number | null>(null);
+  // Transcript id of the in-flight compaction notice, so compaction_end can
+  // flip the same row from shimmer → summary instead of pushing a new line.
+  const compactionIdRef = useRef<number | null>(null);
   const runStartRef = useRef<number>(0);
   const toolsUsedRef = useRef<Set<string>>(new Set());
   const tokensRef = useRef<number>(0);
@@ -506,6 +519,7 @@ function App(): React.ReactElement {
           setRunning(true);
           streamingIdRef.current = null;
           subagentGroupIdRef.current = null;
+          compactionIdRef.current = null;
           runStartRef.current = Date.now();
           toolsUsedRef.current = new Set();
           tokensRef.current = 0;
@@ -571,6 +585,7 @@ function App(): React.ReactElement {
               status: "running",
               activities: [],
               toolUseCount: 0,
+              tokenUsage: { input: 0, output: 0 },
             };
             const groupId = subagentGroupIdRef.current;
             if (groupId !== null) {
@@ -595,7 +610,11 @@ function App(): React.ReactElement {
           // currently running). Append distinct activities into its feed.
           const id = String(d.toolCallId ?? "");
           const update = d.update as
-            | { toolUseCount?: number; currentActivity?: string }
+            | {
+                toolUseCount?: number;
+                currentActivity?: string;
+                tokenUsage?: { input: number; output: number };
+              }
             | undefined;
           const groupId = subagentGroupIdRef.current;
           if (!update || groupId === null) break;
@@ -613,6 +632,7 @@ function App(): React.ReactElement {
                   return {
                     ...a,
                     toolUseCount: update.toolUseCount ?? a.toolUseCount,
+                    tokenUsage: update.tokenUsage ?? a.tokenUsage,
                     activities: activities.slice(-12),
                   };
                 }),
@@ -629,7 +649,11 @@ function App(): React.ReactElement {
           // Finalize a sub-agent's in-chat row: flip status + record duration.
           const groupId = subagentGroupIdRef.current;
           if (groupId !== null) {
-            const durationMs = (details as { durationMs?: number } | undefined)?.durationMs;
+            const endDetails = details as
+              | { durationMs?: number; tokenUsage?: { input: number; output: number } }
+              | undefined;
+            const durationMs = endDetails?.durationMs;
+            const finalTokens = endDetails?.tokenUsage;
             setItems((prev) =>
               prev.map((it) => {
                 // Only the active group, and only when the ended tool is actually
@@ -644,6 +668,7 @@ function App(): React.ReactElement {
                           ...a,
                           status: isError ? ("error" as const) : ("done" as const),
                           durationMs: durationMs ?? a.durationMs,
+                          tokenUsage: finalTokens ?? a.tokenUsage,
                         }
                       : a,
                   ),
@@ -713,9 +738,27 @@ function App(): React.ReactElement {
           }
           break;
         }
-        case "compaction_start":
-          pushItem({ kind: "info", id: nextId(), text: "compacting context\u2026" });
+        case "compaction_start": {
+          const id = nextId();
+          compactionIdRef.current = id;
+          streamingIdRef.current = null;
+          pushItem({ kind: "compaction", id, status: "running" });
           break;
+        }
+        case "compaction_end": {
+          const originalCount = typeof d.originalCount === "number" ? d.originalCount : undefined;
+          const newCount = typeof d.newCount === "number" ? d.newCount : undefined;
+          const id = compactionIdRef.current;
+          compactionIdRef.current = null;
+          setItems((prev) =>
+            prev.map((it) =>
+              it.kind === "compaction" && it.id === id
+                ? { ...it, status: "done" as const, originalCount, newCount }
+                : it,
+            ),
+          );
+          break;
+        }
         case "error":
           pushItem({
             kind: "error",
@@ -886,6 +929,9 @@ function App(): React.ReactElement {
         setItems(
           history.map((h): Item => {
             if (h.hook) return { kind: "hook", id: nextId(), hook: h.hook };
+            // A resumed compacted session shows the quiet compaction notice in
+            // place of the raw summary body (counts aren't persisted).
+            if (h.compacted) return { kind: "compaction", id: nextId(), status: "done" };
             if (h.role !== "user") return { kind: h.role, id: nextId(), text: h.text };
             // App-button prompts (e.g. "Initialize Git") were shown live as a
             // friendly shimmer label, not the expanded body. The label is
@@ -1855,6 +1901,14 @@ function TranscriptRow({
       );
     case "subagent_group":
       return <SubAgentFeed agents={item.agents} aborted={item.aborted} />;
+    case "compaction":
+      return (
+        <CompactionNotice
+          status={item.status}
+          originalCount={item.originalCount}
+          newCount={item.newCount}
+        />
+      );
     default:
       return null;
   }

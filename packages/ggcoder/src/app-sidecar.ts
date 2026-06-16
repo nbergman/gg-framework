@@ -853,16 +853,24 @@ async function main(): Promise<void> {
                     c.type === "image" ? [`data:${c.mediaType};base64,${c.data}`] : [],
                   );
             const hook = m.role === "user" ? detectHookKind(text) : null;
+            // A compacted session persists its summary as a user message prefixed
+            // with this marker. Tag it so the webview renders the quiet "Compacted
+            // context" notice instead of dumping the full summary body.
+            const compacted =
+              m.role === "user" && !hook && text.startsWith("[Previous conversation summary]");
             // Recover a `/name [args]` command invocation from its expanded body
-            // (skip messages already claimed as hooks).
+            // (skip messages already claimed as hooks or compaction summaries).
             const command =
-              m.role === "user" && !hook ? detectPromptCommand(text, commandCandidates) : null;
+              m.role === "user" && !hook && !compacted
+                ? detectPromptCommand(text, commandCandidates)
+                : null;
             return {
               role: m.role as "user" | "assistant",
               text: command ?? text,
               images,
               hook,
               command: command !== null,
+              compacted,
             };
           })
           // Keep messages with text OR images — an image-only user turn has empty

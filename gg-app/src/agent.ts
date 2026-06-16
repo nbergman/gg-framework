@@ -187,6 +187,9 @@ export interface HistoryEntry {
   /** True when `text` is a recovered `/name [args]` command invocation, so the
    *  webview renders the short command chip instead of the expanded body. */
   command?: boolean;
+  /** True when this user message is a post-compaction summary marker, so the
+   *  webview renders the quiet compaction notice instead of the summary body. */
+  compacted?: boolean;
 }
 
 /** Fetch the resumed session's prior messages so the transcript can hydrate. */
