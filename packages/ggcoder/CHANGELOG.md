@@ -1,5 +1,14 @@
 # @kenkaiiii/ggcoder
 
+## 4.11.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @kenkaiiii/gg-core@4.11.0
+  - @kenkaiiii/gg-ai@4.11.0
+  - @kenkaiiii/gg-agent@4.11.0
+
 ## 4.10.2
 
 ### Patch Changes
