@@ -182,9 +182,27 @@ export class AgentSession {
     this.model = options.model;
     this.cwd = options.cwd;
     this.baseUrl = options.baseUrl;
-    this.maxTokens = options.maxTokens ?? getModel(options.model)?.maxOutputTokens ?? 16384;
+    this.maxTokens = this.resolveMaxTokens(options.model);
     this.thinkingLevel = options.thinkingLevel;
     this.customSystemPrompt = options.systemPrompt;
+  }
+
+  /**
+   * Derive the output-token cap for a model. Follows the active model's
+   * `maxOutputTokens` so a session booted on a large-output model (e.g. Kimi's
+   * 256K) doesn't carry that cap to a smaller one (e.g. Opus's 128K) after a
+   * model switch — that mismatch surfaces from the provider as
+   * `max_tokens: 262144 > 128000, which is the maximum allowed …`. An explicit
+   * `maxTokens` override is honored but clamped to the model's ceiling.
+   */
+  private resolveMaxTokens(modelId: string): number {
+    const modelInfo = getModel(modelId);
+    if (this.opts.maxTokens) {
+      return modelInfo
+        ? Math.min(this.opts.maxTokens, modelInfo.maxOutputTokens)
+        : this.opts.maxTokens;
+    }
+    return modelInfo?.maxOutputTokens ?? 16384;
   }
 
   async initialize(): Promise<void> {
@@ -699,6 +717,11 @@ export class AgentSession {
     if (provider) this.provider = provider as Provider;
     this.model = model;
     setEstimatorModel(model);
+    // maxTokens must follow the active model — it was frozen at the boot
+    // model's `maxOutputTokens` in the constructor, so without this a session
+    // booted on e.g. Kimi (256K) keeps sending that cap after switching to a
+    // smaller model (Opus 128K), which the provider rejects.
+    this.maxTokens = this.resolveMaxTokens(model);
     this.eventBus.emit("model_change", { provider: this.provider, model: this.model });
 
     // Update provider-specific tools when provider changes
