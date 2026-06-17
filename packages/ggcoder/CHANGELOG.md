@@ -1,5 +1,14 @@
 # @kenkaiiii/ggcoder
 
+## 4.11.2
+
+### Patch Changes
+
+- a2da1f8: Fix app subagents to inherit the active model at spawn time and render completed plan-step markers cleanly.
+  - @kenkaiiii/gg-ai@4.11.2
+  - @kenkaiiii/gg-agent@4.11.2
+  - @kenkaiiii/gg-core@4.11.2
+
 ## 4.11.1
 
 ### Patch Changes
