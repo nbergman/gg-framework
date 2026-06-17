@@ -146,6 +146,20 @@ export async function getState(): Promise<AgentState> {
   return invoke<AgentState>("agent_state");
 }
 
+export async function openProjectPath(path: string): Promise<void> {
+  let decoded = path;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    // Keep the original string if the model emitted a malformed `%` escape.
+  }
+  try {
+    await invoke("open_project_path", { path: decoded });
+  } catch (e) {
+    await logError(`open_project_path failed: ${String(e)}`);
+  }
+}
+
 /** A chat-input attachment (image / video / other file) sent with a prompt. */
 export interface Attachment {
   kind: "image" | "video" | "file";

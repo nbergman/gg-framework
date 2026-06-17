@@ -21,6 +21,7 @@ import {
   subscribe,
   isSecondaryWindow,
   setWindowTitle,
+  openProjectPath,
   type SidecarEvent,
   type AgentState,
   type ModelOption,
@@ -224,11 +225,16 @@ function pickDoneVerb(toolsUsed: ReadonlySet<string>): string {
   return phrases[Math.floor(Math.random() * phrases.length)] ?? "Worked in";
 }
 
+function hasDraggedFiles(dataTransfer: DataTransfer | null): boolean {
+  return Array.from(dataTransfer?.types ?? []).includes("Files");
+}
+
 function App(): React.ReactElement {
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState("");
-  // Staged attachments (paste / attach button / drag-drop) shown above the input.
+  // Staged attachments (paste / attach button / whole-window drag-drop) shown above the input.
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  const [isFileDragOver, setIsFileDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Number of messages queued mid-run (injected as steering by the sidecar).
   const [queuedCount, setQueuedCount] = useState(0);
@@ -408,13 +414,13 @@ function App(): React.ReactElement {
   }, [state]);
 
   // Stop the browser from navigating to / opening a file dropped anywhere
-  // outside the input (which would replace the whole UI with the raw file).
-  // The input's own onDrop handles real attachments; this just suppresses the
-  // default everywhere else.
+  // (which would replace the whole UI with the raw file). The active chat view
+  // handles those drops as attachments; entry/picker screens just suppress the
+  // default behavior.
   useEffect(() => {
     const prevent = (e: DragEvent): void => {
       // Only files — don't interfere with text selection drags.
-      if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+      if (hasDraggedFiles(e.dataTransfer)) e.preventDefault();
     };
     window.addEventListener("dragover", prevent);
     window.addEventListener("drop", prevent);
@@ -1298,12 +1304,45 @@ function App(): React.ReactElement {
     void sendPrompt(prompt, wire);
   }
 
-  // ── Attachment intake (paste / attach button / drag-drop) ──
+  // ── Attachment intake (paste / attach button / whole-window drag-drop) ──
   async function addFiles(files: FileList | File[]): Promise<void> {
     const list = Array.from(files);
     const pendings = await Promise.all(list.map((f) => fileToPending(f).catch(() => null)));
     const ok = pendings.filter((p): p is PendingAttachment => p !== null);
     if (ok.length > 0) setAttachments((prev) => [...prev, ...ok]);
+  }
+
+  function canHandleWindowFileDrop(): boolean {
+    return !document.querySelector(".modal-backdrop");
+  }
+
+  function handleWindowDragEnter(e: React.DragEvent<HTMLDivElement>): void {
+    if (!hasDraggedFiles(e.dataTransfer) || !canHandleWindowFileDrop()) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setIsFileDragOver(true);
+  }
+
+  function handleWindowDragOver(e: React.DragEvent<HTMLDivElement>): void {
+    if (!hasDraggedFiles(e.dataTransfer) || !canHandleWindowFileDrop()) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setIsFileDragOver(true);
+  }
+
+  function handleWindowDragLeave(e: React.DragEvent<HTMLDivElement>): void {
+    if (!hasDraggedFiles(e.dataTransfer)) return;
+    const nextTarget = e.relatedTarget;
+    if (nextTarget instanceof Node && e.currentTarget.contains(nextTarget)) return;
+    setIsFileDragOver(false);
+  }
+
+  function handleWindowDrop(e: React.DragEvent<HTMLDivElement>): void {
+    if (!hasDraggedFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    setIsFileDragOver(false);
+    if (!canHandleWindowFileDrop()) return;
+    if (e.dataTransfer.files.length > 0) void addFiles(e.dataTransfer.files);
   }
 
   function removeAttachment(id: number): void {
@@ -1454,7 +1493,14 @@ function App(): React.ReactElement {
   }
 
   return (
-    <div className="app" style={{ background: theme.background }}>
+    <div
+      className={`app${isFileDragOver ? " app-file-dragover" : ""}`}
+      style={{ background: theme.background }}
+      onDragEnter={handleWindowDragEnter}
+      onDragOver={handleWindowDragOver}
+      onDragLeave={handleWindowDragLeave}
+      onDrop={handleWindowDrop}
+    >
       <div className="chat-head">
         {/* Top strip — the macOS traffic-light row. Holds the window title (where
             the native title used to sit) and the show/hide toggle. Always
@@ -1583,19 +1629,7 @@ function App(): React.ReactElement {
         />
       </div>
 
-      <div
-        className="inputwrap"
-        onDragOver={(e) => {
-          e.preventDefault();
-          e.currentTarget.classList.add("dragover");
-        }}
-        onDragLeave={(e) => e.currentTarget.classList.remove("dragover")}
-        onDrop={(e) => {
-          e.preventDefault();
-          e.currentTarget.classList.remove("dragover");
-          if (e.dataTransfer.files.length > 0) void addFiles(e.dataTransfer.files);
-        }}
-      >
+      <div className={`inputwrap${isFileDragOver ? " dragover" : ""}`}>
         {slashOpen && (
           <SlashMenu
             commands={slashMatches}
@@ -1970,21 +2004,38 @@ function TranscriptRow({
     case "images":
       return (
         <div className="img-grid">
-          {item.images.map((img, i) => (
-            <figure key={img.path ?? i} className="img-card">
-              <img
-                className="img-thumb"
-                src={img.src}
-                alt={img.path ?? "image"}
-                onLoad={onImageLoad}
-              />
-              {img.path && (
-                <figcaption className="img-cap" title={img.path}>
-                  {img.path.split("/").filter(Boolean).pop()}
-                </figcaption>
-              )}
-            </figure>
-          ))}
+          {item.images.map((img, i) => {
+            const openImage = (): void => {
+              if (img.path) void openProjectPath(img.path);
+            };
+            return (
+              <figure
+                key={img.path ?? i}
+                className={`img-card${img.path ? " img-card-clickable" : ""}`}
+                role={img.path ? "button" : undefined}
+                tabIndex={img.path ? 0 : undefined}
+                title={img.path ? `Open ${img.path}` : undefined}
+                onClick={openImage}
+                onKeyDown={(e) => {
+                  if (!img.path || (e.key !== "Enter" && e.key !== " ")) return;
+                  e.preventDefault();
+                  openImage();
+                }}
+              >
+                <img
+                  className="img-thumb"
+                  src={img.src}
+                  alt={img.path ?? "image"}
+                  onLoad={onImageLoad}
+                />
+                {img.path && (
+                  <figcaption className="img-cap" title={img.path}>
+                    {img.path.split("/").filter(Boolean).pop()}
+                  </figcaption>
+                )}
+              </figure>
+            );
+          })}
         </div>
       );
     case "plan":

@@ -10,6 +10,7 @@ use std::os::unix::process::CommandExt;
 
 use futures_util::StreamExt;
 use tauri::{Emitter, EventTarget, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri_plugin_opener::OpenerExt;
 
 /// One Node agent sidecar, owned by a single window. Each window runs its own
 /// agent against its own project cwd, so windows never share state. `cwd` and
@@ -323,10 +324,74 @@ fn port_for(webview: &WebviewWindow) -> Option<u16> {
     map.get(webview.label()).and_then(|i| i.port)
 }
 
+fn cwd_for(webview: &WebviewWindow) -> Option<PathBuf> {
+    let state: State<Sidecars> = webview.state();
+    let map = state.map.lock().unwrap();
+    map.get(webview.label()).and_then(|i| i.cwd.clone())
+}
+
 /// Frontend polls this until it returns a port (mirrors the `sidecar-ready` event).
 #[tauri::command]
 fn sidecar_port(webview: WebviewWindow) -> Option<u16> {
     port_for(&webview)
+}
+
+fn strip_file_location_suffix(path: &str) -> &str {
+    let mut end = path.len();
+    for _ in 0..2 {
+        let Some(colon) = path[..end].rfind(':') else {
+            break;
+        };
+        let suffix = &path[colon + 1..end];
+        if suffix.is_empty() || !suffix.chars().all(|c| c.is_ascii_digit()) {
+            break;
+        }
+        let last_sep = path[..colon].rfind(|c| c == '/' || c == '\\').unwrap_or(0);
+        if colon <= last_sep {
+            break;
+        }
+        end = colon;
+    }
+    &path[..end]
+}
+
+/// Open a project file linked from the chat. Relative paths resolve against this
+/// window's sidecar cwd; `:line[:col]` and `#Lline` decorations are tolerated.
+#[tauri::command]
+fn open_project_path(webview: WebviewWindow, path: String) -> Result<(), String> {
+    let cwd = cwd_for(&webview).ok_or("sidecar not ready")?;
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("empty path".into());
+    }
+    if trimmed.contains("://") && !trimmed.starts_with("file://") {
+        return Err("not a file path".into());
+    }
+
+    let without_file_scheme = trimmed.strip_prefix("file://").unwrap_or(trimmed);
+    let without_anchor = without_file_scheme
+        .split_once("#L")
+        .map(|(p, _)| p)
+        .unwrap_or(without_file_scheme);
+    let without_query = without_anchor
+        .split_once('?')
+        .map(|(p, _)| p)
+        .unwrap_or(without_anchor);
+    let cleaned = strip_file_location_suffix(without_query);
+    let candidate = PathBuf::from(cleaned);
+    let resolved = if candidate.is_absolute() {
+        candidate
+    } else {
+        cwd.join(candidate)
+    };
+    let canonical = resolved
+        .canonicalize()
+        .map_err(|_| format!("file not found: {}", cleaned))?;
+
+    webview
+        .opener()
+        .open_path(canonical.to_string_lossy().to_string(), None::<String>)
+        .map_err(|e| e.to_string())
 }
 
 /// Proxy: current agent/session state.
@@ -2119,6 +2184,7 @@ pub fn run() {
         .manage(reqwest::Client::new())
         .invoke_handler(tauri::generate_handler![
             sidecar_port,
+            open_project_path,
             agent_state,
             agent_prompt,
             agent_cancel,
