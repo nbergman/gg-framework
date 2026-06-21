@@ -15,6 +15,7 @@ import {
   MCP_OAUTH_CALLBACK_PATH,
 } from "./oauth-provider.js";
 import { McpOAuthStore } from "./oauth-store.js";
+import { isLocalhost, alternateLoopback, isNetworkError } from "./loopback.js";
 
 interface ConnectedServer {
   name: string;
@@ -276,37 +277,30 @@ export class MCPClientManager {
         throw err;
       }
     } else {
-      // HTTP transport — try StreamableHTTP first, fall back to SSE. An OAuth
-      // provider (no `onRedirect`) is always attached: if the server has saved
-      // tokens it connects/refreshes silently; if it needs auth the SDK throws
-      // UnauthorizedError, which the caller maps to `requiresAuth`.
+      // HTTP transport (Streamable HTTP or SSE). See connectHttp for the
+      // transport-selection + auth logic.
       const url = new URL(config.url!);
-      const reqInit = config.headers ? { headers: config.headers } : undefined;
-      const authProvider = new McpOAuthProvider({ serverName: config.name });
+      const isLocal = isLocalhost(url);
 
       try {
-        transport = new StreamableHTTPClientTransport(url, {
-          requestInit: reqInit,
-          authProvider,
+        const r = await this.connectHttp(url, config, isLocal, timeout);
+        client = r.client;
+        transport = r.transport;
+      } catch (err) {
+        // Windows 11 resolves `localhost` → ::1 (IPv6) first; if the server
+        // binds IPv4-only (127.0.0.1) the first fetch gets ECONNREFUSED.
+        // Retry once with the alternate loopback hostname. macOS resolves
+        // both stacks so this only bites Windows/Linux in practice.
+        const alt = isLocal ? alternateLoopback(url.hostname) : undefined;
+        if (!alt || !isNetworkError(err)) throw err;
+        log("INFO", "mcp", `localhost connect failed for "${config.name}", retrying as ${alt}`, {
+          error: String(err),
         });
-        client = new Client({ name: "ggcoder", version: "1.0.0" });
-        await client.connect(transport, { timeout });
-      } catch (streamableErr) {
-        // A 401 isn't a transport mismatch — don't waste time on the SSE
-        // fallback, just surface that login is required.
-        if (isUnauthorized(streamableErr)) throw streamableErr;
-        log("INFO", "mcp", `StreamableHTTP failed for "${config.name}", trying SSE fallback`, {
-          error: String(streamableErr),
-        });
-        transport = new SSEClientTransport(url, {
-          eventSourceInit: config.headers
-            ? { fetch: createHeaderFetch(config.headers) }
-            : undefined,
-          requestInit: reqInit,
-          authProvider,
-        });
-        client = new Client({ name: "ggcoder", version: "1.0.0" });
-        await client.connect(transport, { timeout });
+        const altUrl = new URL(url);
+        altUrl.hostname = alt;
+        const r = await this.connectHttp(altUrl, config, isLocal, timeout);
+        client = r.client;
+        transport = r.transport;
       }
     }
 
@@ -365,6 +359,65 @@ export class MCPClientManager {
     });
   }
 
+  /**
+   * Connect a single HTTP (Streamable HTTP or SSE) server and return the live
+   * client + transport. Transport selection:
+   * - `transport === "sse"` → legacy SSE directly (Playwright MCP `--port`).
+   * - otherwise → Streamable HTTP first, SSE fallback for older servers.
+   *
+   * An OAuth provider is attached only for REMOTE servers — localhost never
+   * needs OAuth and attaching it there is dead weight that can misdiagnose a
+   * protocol mismatch as a login requirement.
+   */
+  private async connectHttp(
+    url: URL,
+    config: MCPServerConfig,
+    isLocal: boolean,
+    timeout: number,
+  ): Promise<{
+    client: Client;
+    transport: StreamableHTTPClientTransport | SSEClientTransport;
+  }> {
+    const reqInit = config.headers ? { headers: config.headers } : undefined;
+    const authProvider = isLocal ? undefined : new McpOAuthProvider({ serverName: config.name });
+    const sseTransport = (): SSEClientTransport =>
+      new SSEClientTransport(url, {
+        eventSourceInit: config.headers ? { fetch: createHeaderFetch(config.headers) } : undefined,
+        requestInit: reqInit,
+        authProvider,
+      });
+
+    if (config.transport === "sse") {
+      const transport = sseTransport();
+      const client = new Client({ name: "ggcoder", version: "1.0.0" });
+      await client.connect(transport, { timeout });
+      return { client, transport };
+    }
+
+    try {
+      const transport = new StreamableHTTPClientTransport(url, {
+        requestInit: reqInit,
+        authProvider,
+      });
+      const client = new Client({ name: "ggcoder", version: "1.0.0" });
+      await client.connect(transport, { timeout });
+      return { client, transport };
+    } catch (streamableErr) {
+      // For localhost, always try the SSE fallback — a 401 from localhost is
+      // almost certainly a protocol mismatch (e.g. Playwright MCP serves SSE),
+      // not an auth requirement. For remote servers, a 401 means OAuth is needed
+      // so skip the fallback and surface "requires login".
+      if (!isLocal && isUnauthorized(streamableErr)) throw streamableErr;
+      log("INFO", "mcp", `StreamableHTTP failed for "${config.name}", trying SSE fallback`, {
+        error: String(streamableErr),
+      });
+      const transport = sseTransport();
+      const client = new Client({ name: "ggcoder", version: "1.0.0" });
+      await client.connect(transport, { timeout });
+      return { client, transport };
+    }
+  }
+
   async dispose(): Promise<void> {
     for (const server of this.servers) {
       try {
@@ -377,11 +430,6 @@ export class MCPClientManager {
   }
 }
 
-/**
- * Create a custom fetch wrapper that injects extra headers into every request.
- * Used for SSEClientTransport's eventSourceInit to pass auth headers
- * on the initial SSE GET connection (which doesn't use requestInit).
- */
 /**
  * Turn a thrown connection error into a short human-readable string. Surfaces
  * the common rate-limit case explicitly; otherwise the underlying message.
@@ -419,6 +467,11 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/**
+ * Create a custom fetch wrapper that injects extra headers into every request.
+ * Used for SSEClientTransport's eventSourceInit to pass auth headers
+ * on the initial SSE GET connection (which doesn't use requestInit).
+ */
 function createHeaderFetch(extraHeaders: Record<string, string>) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (url: string | URL, init: any): Promise<Response> => {

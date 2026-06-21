@@ -105,7 +105,7 @@ export function McpModal({ onClose }: Props): React.ReactElement {
     const trimmed = line.trim();
     if (!trimmed || busy) return;
     if (scope === "project" && !projectPath) {
-      toast("Pick a project first.", "warning");
+      toast("Enter or pick a project path first.", "warning");
       return;
     }
     setBusy(true);
@@ -245,6 +245,9 @@ export function McpModal({ onClose }: Props): React.ReactElement {
       </div>
       <div className="modal-hint" style={{ color: theme.textDim }}>
         Paste a <code>claude mcp add …</code> or <code>ggcoder mcp add …</code> line.
+        <br />
+        For local servers started with <code>--port</code> (e.g.&nbsp;Playwright MCP), use{" "}
+        <code>--transport sse</code>.
       </div>
       <input
         className="modal-input"
@@ -274,27 +277,28 @@ export function McpModal({ onClose }: Props): React.ReactElement {
         </button>
       </div>
       {scope === "project" && (
-        <select
-          className="modal-input"
-          style={{
-            color: projectPath ? theme.text : theme.textMuted,
-            background: theme.inputBackground,
-            width: "100%",
-            marginTop: 10,
-            cursor: "pointer",
-          }}
-          value={projectPath}
-          onChange={(e) => setProjectPath(e.target.value)}
-        >
-          <option value="" disabled>
-            Choose a project…
-          </option>
-          {projects.map((p) => (
-            <option key={p.path} value={p.path}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+        <>
+          <input
+            className="modal-input"
+            style={{
+              color: projectPath ? theme.text : theme.textMuted,
+              background: theme.inputBackground,
+              width: "100%",
+              marginTop: 10,
+            }}
+            value={projectPath}
+            placeholder="Type a project path or pick below…"
+            list="mcp-project-paths"
+            onChange={(e) => setProjectPath(e.target.value)}
+          />
+          <datalist id="mcp-project-paths">
+            {projects.map((p) => (
+              <option key={p.path} value={p.path}>
+                {p.name}
+              </option>
+            ))}
+          </datalist>
+        </>
       )}
 
       <div className="modal-hint" style={{ color: theme.textDim, marginTop: 12 }}>
