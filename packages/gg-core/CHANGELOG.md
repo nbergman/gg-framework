@@ -1,5 +1,21 @@
 # @kenkaiiii/gg-core
 
+## 4.13.0
+
+### Minor Changes
+
+- Update system prompt talk section for ADHD-readable responses
+
+  Rewrite `renderTalkSection()` so every reply leads with the outcome word
+  (Fixed/Done/Broken/Failed), enforces bottom-line-first scanning, one idea
+  per line, pick-don't-menu, concrete metrics, no unresolved it-depends, and
+  affirmative phrasing. Designed for fast scanning and low working memory.
+
+### Patch Changes
+
+- Updated dependencies
+  - @kenkaiiii/gg-ai@4.13.0
+
 ## 4.12.2
 
 ### Patch Changes
