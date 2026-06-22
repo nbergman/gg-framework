@@ -1381,19 +1381,14 @@ body {
   word-break: break-word;
 }
 
-/* Long-session perf: let the engine skip layout/paint/style for off-screen
-   transcript rows. Rows are block-level and stack (no flex/gap on children), so
-   this is a pure rendering optimization — the scroll container, pin-to-bottom
-   logic, and DOM order are all untouched. `contain-intrinsic-size: auto <len>`
-   reserves estimated height for skipped rows AND remembers each row's real size
-   after its first render, so scrolling up stays stable. Bottom rows are always
-   on-screen (rendered real-sized), so streaming auto-scroll lands exactly at the
-   true bottom. Unsupported engines simply ignore it and render every row as
-   before — no behavioral change, graceful degradation. */
-.transcript > * {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 48px;
-}
+/* NOTE: `content-visibility: auto` was tried here as a long-session perf win but
+   caused jaggedy upward scrolling. Skipped off-screen rows reserve only an
+   estimated height (`contain-intrinsic-size`), and `auto` remembers a row's real
+   size only AFTER it has rendered once. Scrolling up re-enters rows above the
+   viewport whose tall real heights (code blocks, markdown, images) replace the
+   placeholder estimate, shifting everything below and jumping the scroll
+   position. Plain rows render fine even in long sessions, so it's not worth the
+   jank — leave it off. */
 
 .transcript::-webkit-scrollbar {
   width: 8px;
