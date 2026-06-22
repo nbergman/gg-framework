@@ -809,12 +809,32 @@ async function createSession(
     };
   }
 
+  // tool_call_end carries no tool name (only the id), so remember each call's
+  // name from tool_call_start to log a useful line on completion. Mirrors the
+  // CLI's logging so the app sidecar's ~/.gg/gg-app-sidecar.log records tool
+  // failures (e.g. repeated invalid-argument errors) instead of leaving the
+  // fatal-abort path with no forensic trail.
+  const toolCallNames = new Map<string, string>();
+
   // Forward every relevant bus event to the webview.
   session.eventBus.on("text_delta", (d) => broadcast("text_delta", d));
   session.eventBus.on("thinking_delta", (d) => broadcast("thinking_delta", d));
-  session.eventBus.on("tool_call_start", (d) => broadcast("tool_call_start", d));
+  session.eventBus.on("tool_call_start", (d) => {
+    toolCallNames.set(d.toolCallId, d.name);
+    broadcast("tool_call_start", d);
+  });
   session.eventBus.on("tool_call_update", (d) => broadcast("tool_call_update", d));
-  session.eventBus.on("tool_call_end", (d) => broadcast("tool_call_end", d));
+  session.eventBus.on("tool_call_end", (d) => {
+    const name = toolCallNames.get(d.toolCallId) ?? "unknown";
+    toolCallNames.delete(d.toolCallId);
+    log(d.isError ? "ERROR" : "INFO", "tool", `Tool call ended: ${name}`, {
+      id: d.toolCallId,
+      durationMs: String(d.durationMs),
+      isError: String(d.isError),
+      ...(d.isError ? { result: d.result.slice(0, 500) } : {}),
+    });
+    broadcast("tool_call_end", d);
+  });
   // Native server tools (e.g. Anthropic web_search) do NOT end the turn — text
   // streams before and after them in the SAME turn. The webview must reset its
   // streaming bubble here, or the two text blocks concatenate with no separator
@@ -822,9 +842,11 @@ async function createSession(
   session.eventBus.on("server_tool_call", (d) => broadcast("server_tool_call", d));
   session.eventBus.on("turn_end", (d) => broadcast("turn_end", d));
   session.eventBus.on("agent_done", (d) => broadcast("agent_done", d));
-  session.eventBus.on("error", (d) =>
-    broadcast("error", { message: d.error instanceof Error ? d.error.message : String(d.error) }),
-  );
+  session.eventBus.on("error", (d) => {
+    const message = d.error instanceof Error ? d.error.message : String(d.error);
+    log("ERROR", "app-sidecar", "agent error", { message });
+    broadcast("error", { message });
+  });
   session.eventBus.on("model_change", (d) => broadcast("model_change", d));
   session.eventBus.on("hook", (d) => broadcast("hook", d));
   session.eventBus.on("compaction_start", (d) => broadcast("compaction_start", d));
