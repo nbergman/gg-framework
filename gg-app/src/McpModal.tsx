@@ -212,14 +212,8 @@ export function McpModal({ onClose }: Props): React.ReactElement {
               ) : null}
               {s.requiresAuth && !s.ok && (
                 <button
-                  className="modal-btn"
-                  style={{
-                    color: loggingIn === s.name ? theme.textDim : theme.background,
-                    background: loggingIn === s.name ? "transparent" : theme.primary,
-                    borderColor: theme.primary,
-                    padding: "2px 10px",
-                    fontSize: 12,
-                  }}
+                  className="modal-btn primary"
+                  style={{ padding: "2px 12px", fontSize: 12 }}
                   disabled={loggingIn === s.name}
                   title={`Sign in to "${s.name}"`}
                   onClick={() => void signIn(s.name, s.scope)}
@@ -263,14 +257,12 @@ export function McpModal({ onClose }: Props): React.ReactElement {
       <div className="mcp-scope-toggle">
         <button
           className={`modal-btn${scope === "global" ? " primary" : ""}`}
-          style={scopeBtnStyle(scope === "global")}
           onClick={() => setScope("global")}
         >
           Global
         </button>
         <button
           className={`modal-btn${scope === "project" ? " primary" : ""}`}
-          style={scopeBtnStyle(scope === "project")}
           onClick={() => setScope("project")}
         >
           Project
@@ -306,16 +298,11 @@ export function McpModal({ onClose }: Props): React.ReactElement {
       </div>
 
       <div className="modal-actions">
-        <button className="modal-btn" style={{ color: theme.textMuted }} onClick={onClose}>
+        <button className="modal-btn" onClick={onClose}>
           Close
         </button>
         <button
           className="modal-btn primary"
-          style={{
-            color: line.trim() && !busy ? theme.background : theme.textDim,
-            background: line.trim() && !busy ? theme.primary : "transparent",
-            borderColor: line.trim() && !busy ? theme.primary : theme.border,
-          }}
           disabled={!line.trim() || busy}
           onClick={() => void add()}
         >
@@ -324,11 +311,4 @@ export function McpModal({ onClose }: Props): React.ReactElement {
       </div>
     </Modal>
   );
-}
-
-/** Inline style for the scope-toggle buttons; active = primary fill. */
-function scopeBtnStyle(active: boolean): React.CSSProperties {
-  return active
-    ? { color: theme.background, background: theme.primary, borderColor: theme.primary }
-    : { color: theme.textMuted, background: "transparent", borderColor: theme.border };
 }
