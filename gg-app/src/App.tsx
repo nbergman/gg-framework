@@ -47,6 +47,7 @@ import { ContextMeter } from "./ContextMeter";
 import { BackgroundTasksButton } from "./BackgroundTasksButton";
 import { TasksModal } from "./TasksModal";
 import { ShimmerText } from "./ShimmerText";
+import { WakeScreen } from "./WakeScreen";
 import { ConfirmModal } from "./ConfirmModal";
 import { InitGitModal } from "./InitGitModal";
 import { PlanModeLogo } from "./PlanModeLogo";
@@ -1862,13 +1863,14 @@ function App(): React.ReactElement {
           <TranscriptSkeleton />
         ) : (
           <>
-            {items.length === 0 && (
-              <div className="line transcript-reveal" style={{ color: theme.textDim }}>
-                {status === "ready"
-                  ? "Ready. Type a message below to start coding."
-                  : `\u273b ${status}`}
-              </div>
-            )}
+            {items.length === 0 &&
+              (status === "ready" ? (
+                <WakeScreen />
+              ) : (
+                <div className="line transcript-reveal" style={{ color: theme.textDim }}>
+                  {`\u273b ${status}`}
+                </div>
+              ))}
             {items.map((it) => (
               <TranscriptRow key={it.id} item={it} onImageLoad={maybeScrollToBottom} />
             ))}
