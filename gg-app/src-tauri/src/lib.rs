@@ -1915,6 +1915,43 @@ async fn new_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// The "What's new" modal lives in its OWN dedicated window so it appears EXACTLY
+/// once (the main webview decides; see WhatsNewTrigger) and centers on the user's
+/// SCREEN rather than inside whichever tiled project window happens to be open.
+/// Reuses `index.html` with a `?whatsnew=1` flag — main.tsx renders only the
+/// modal for that flag, so no second Vite entry / build-config change is needed.
+/// Borderless + centered + always-on-top + off the taskbar so it reads as a
+/// transient OS dialog. The window closes itself from the webview
+/// (`getCurrentWebviewWindow().close()`); re-invoking just refocuses an open one.
+///
+/// `async` for the same WebView2 reason as `setup_windows`/`new_window`.
+#[tauri::command]
+async fn open_whatsnew_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("whatsnew") {
+        let _ = win.set_focus();
+        return Ok(());
+    }
+    let win = WebviewWindowBuilder::new(
+        &app,
+        "whatsnew",
+        WebviewUrl::App("index.html?whatsnew=1".into()),
+    )
+    .title("What's new")
+    .inner_size(600.0, 640.0)
+    .resizable(false)
+    .minimizable(false)
+    .maximizable(false)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .center()
+    .build()
+    .map_err(|e| e.to_string())?;
+    let _ = win.set_focus();
+    Ok(())
+}
+
 /// Cycle keyboard focus by `offset` (±1) through windows in reading order,
 /// wrapping around. No-op when ≤1 window is open. Forward = +1, backward = -1
 /// (Shift held). Bound to Cmd/Ctrl + Backquote (±Shift).
@@ -2787,6 +2824,7 @@ pub fn run() {
             agent_commands,
             setup_windows,
             new_window,
+            open_whatsnew_window,
             select_project,
             agent_projects,
             agent_sessions,

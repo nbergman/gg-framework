@@ -465,7 +465,8 @@ body {
 .home > .home-byline,
 .home > .home-actions,
 .home > .home-update,
-.home > .home-version {
+.home > .home-version,
+.home > .home-version-row {
   position: relative;
   z-index: 1;
 }
@@ -474,6 +475,7 @@ body {
    shimmer, so it gets BOTH animations (reveal-up once + ggshimmer looping). */
 .home > .home-update,
 .home > .home-version,
+.home > .home-version-row,
 .home > .home-tagline,
 .home > .home-byline,
 .home > .home-actions {
@@ -486,7 +488,8 @@ body {
   animation-delay: 120ms, 0s;
 }
 .home > .home-update,
-.home > .home-version {
+.home > .home-version,
+.home > .home-version-row {
   animation-delay: 40ms;
 }
 .home > .home-tagline {
@@ -501,6 +504,7 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .home > .home-update,
   .home > .home-version,
+  .home > .home-version-row,
   .home > .home-tagline,
   .home > .home-byline,
   .home > .home-actions {
@@ -1048,6 +1052,103 @@ body {
 /* The notes modal is a workspace, not a small dialog — give it room. */
 .notes-modal {
   width: min(900px, 94vw);
+}
+
+/* ── What's-new window (post-update release notes) ──
+   Lives in its OWN borderless, screen-centered, TRANSPARENT Tauri window (see
+   Rust `open_whatsnew_window`). The native window is see-through so the rounded
+   card below shows real corners + a drop shadow, matching the in-app modals
+   instead of a hard rectangular window edge. */
+.whatsnew-root,
+.whatsnew-root body {
+  background: transparent;
+}
+.whatsnew-window {
+  display: flex;
+  flex-direction: column;
+  /* Fill the transparent window edge-to-edge: only the corners are clipped by
+     the radius (showing the desktop through them), so there's no inset gap or
+     shadow halo around the card. */
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  padding: 22px 24px;
+  border-radius: var(--radius-card);
+  /* Clip the confetti canvas to the rounded corners. */
+  overflow: hidden;
+  /* The window root sets the base font so the heading + body inherit our sans
+     stack (the `.modal-title` class only sizes/weights, it never sets family,
+     and this window has no `.modal` ancestor to inherit from). */
+  font-family: var(--sans);
+  /* Match the in-app modal's scrollbar treatment (those rules are scoped to
+     `.modal`, which this window doesn't use). */
+}
+/* One-shot confetti overlay — covers the whole modal, never intercepts clicks,
+   sits above the content while the burst plays then clears itself. */
+.confetti-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 5;
+}
+.whatsnew-window ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.whatsnew-window ::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+/* Scroll container takes the remaining height and engages once the notes outgrow
+   it — short release lists sit at their natural height, long ones scroll. */
+.whatsnew-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* Pad the right edge so the scrollbar never overlaps the text. */
+  padding-right: 8px;
+  margin-right: -4px;
+}
+.whatsnew-section {
+  margin-bottom: 22px;
+}
+.whatsnew-section:last-child {
+  margin-bottom: 0;
+}
+.whatsnew-version {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+.whatsnew-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.whatsnew-item {
+  position: relative;
+  padding-left: 18px;
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.whatsnew-item::before {
+  content: "\203a";
+  position: absolute;
+  left: 4px;
+  top: -0.5px;
+  color: var(--primary);
+  font-weight: 700;
 }
 
 /* ── Tasks modal (project task list → run one / run all) ── */
@@ -2918,15 +3019,37 @@ body {
   opacity: 0.7;
   cursor: default;
 }
-/* Shown in the update pill's place when already up to date — just the current
-   version, muted, so the spot never collapses/jumps. */
-.home-version {
+/* Shown in the update pill's place when already up to date — the current
+   version plus a "What's new" button, so the spot never collapses/jumps. */
+.home-version-row {
   align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.home-version {
   font-family: var(--mono);
   font-size: 12px;
   font-weight: 500;
   color: var(--text-dim);
   letter-spacing: 0.02em;
+}
+/* Small text button to the right of the version that re-opens the What's-new
+   window. Borderless + muted so it reads as a quiet secondary link, not a CTA. */
+.home-whatsnew {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  letter-spacing: -0.005em;
+  transition: color var(--t-fast);
+}
+.home-whatsnew:hover {
+  color: var(--text);
 }
 
 .footer {

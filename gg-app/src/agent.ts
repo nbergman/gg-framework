@@ -567,6 +567,18 @@ export async function setupWindows(count: number): Promise<void> {
   }
 }
 
+/** Open the dedicated, screen-centered "What's new" window (or refocus it if it's
+ *  already open). Only the main window calls this, exactly once per update — see
+ *  WhatsNewTrigger. */
+export async function openWhatsNewWindow(): Promise<void> {
+  try {
+    await invoke("open_whatsnew_window");
+  } catch (e) {
+    await logError(`open_whatsnew_window failed: ${String(e)}`);
+    throw e;
+  }
+}
+
 // ── Gaze focus (webcam eye/head tracking → window focus) ───────────
 
 /** Payload of the `gaze-target` event broadcast to every window. `target` is the
