@@ -18,6 +18,7 @@ import {
 import { getClaudeCliUserAgent } from "../../core/claude-code-version.js";
 import { kimiCodingHeaders, isKimiCodingEndpoint } from "../../core/oauth/kimi.js";
 import { log } from "../../core/logger.js";
+import { wrapSteeringContent } from "../../core/steering.js";
 
 /** Extract plain text from this run's user input — the verbatim request that
  *  the re-grounding hook re-pins after a compaction. Captured at run start so
@@ -617,8 +618,11 @@ export function useAgentLoop(
                 const batch = queueRef.current.splice(0);
                 setQueuedCount(0);
                 const merged = mergeUserContent(batch.map((q) => q.content));
+                // Show the user their verbatim message; send the framed version
+                // so the model treats it as concurrent steering, not a fresh
+                // request that supersedes the original task.
                 onQueuedStart?.(merged);
-                return [{ role: "user" as const, content: merged }];
+                return [{ role: "user" as const, content: wrapSteeringContent(merged) }];
               }
 
               // Loop-breaker: at most once per run, when the agent looks stuck.
