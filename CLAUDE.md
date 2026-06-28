@@ -12,7 +12,6 @@ A modular TypeScript framework for building LLM-powered apps — from raw stream
 | `packages/ggcoder` | `@kenkaiiii/ggcoder` | CLI coding agent + `app-sidecar` (the gg-app backend) |
 | `gg-app` | (private — Tauri desktop app) | **The desktop app — primary product we ship to users** |
 | `packages/gg-pixel` | `@kenkaiiii/gg-pixel` | Universal error tracking SDK (Node + Browser + Deno + Workers) |
-| `packages/gg-pixel-server` | (private — Cloudflare Worker) | Ingest backend (Workers + D1) |
 
 **Install CLI**: `npm i -g @kenkaiiii/ggcoder` · **Desktop app**: `cd gg-app && pnpm tauri dev`
 
@@ -368,7 +367,7 @@ ggcoder mcp add --env AIRTABLE_API_KEY=key airtable -- npx -y airtable-mcp-serve
 
 ## Pixel — error tracking + auto-fix queue
 
-`@kenkaiiii/gg-pixel` is a drop-in error tracking SDK. Errors flow to a Cloudflare Worker (`gg-pixel-server`) backed by D1. `ggcoder pixel` opens an in-Ink overlay that lists open errors per project and hands each one off to the existing agent loop — same UX as the Task pane.
+`@kenkaiiii/gg-pixel` is a drop-in error tracking SDK. Errors flow to a deployed Cloudflare Worker ingest backend (backed by D1; its source is no longer kept in this repo). `ggcoder pixel` opens an in-Ink overlay that lists open errors per project and hands each one off to the existing agent loop — same UX as the Task pane.
 
 ### CLI
 
@@ -396,7 +395,7 @@ Reset chat state (`setHistory`, `setLiveItems`, `setStaticKey`, screen clear) **
 
 ### Backend
 
-`packages/gg-pixel-server/` — Hono on Workers + D1. Routes:
+The ingest backend is a deployed Hono-on-Workers + D1 service (source no longer kept in this repo). The SDK + CLI target it over HTTPS. API contract:
 - `POST /ingest` — SDK posts events; server dedupes by `(project_id, fingerprint)`. Validated + size-capped + per-project unique-fingerprint cap (10K). CORS-open since the publishable `project_key` is the auth boundary for ingest only.
 - `POST /api/projects` — globally rate-limited (100/hr). Returns `{ id, key, secret }` once on creation; the `secret` is the bearer token for every other `/api/*` call from that project's owner.
 - `GET /api/projects/:id/errors` — bearer-authed (`Authorization: Bearer sk_live_…`); 403 if the secret doesn't own the project.
