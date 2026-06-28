@@ -107,7 +107,6 @@
     "@kenkaiiii/gg-agent": "workspace:*",
     "@kenkaiiii/gg-ai": "workspace:*",
     "@kenkaiiii/gg-core": "workspace:*",
-    "@kenkaiiii/gg-pixel": "workspace:*",
     "@kenkaiiii/kencode-search": "^0.1.17",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "ansi-regex": "^6.2.2",
