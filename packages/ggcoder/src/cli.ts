@@ -169,7 +169,7 @@ function printHelp(): void {
       "--provider <name>",
       "AI provider (anthropic, xiaomi, openai, gemini, glm, moonshot, minimax, deepseek, openrouter, sakana)",
     ],
-    ["--model <name>", "Model to use (e.g. claude-sonnet-4-6, gpt-5.5)"],
+    ["--model <name>", "Model to use (e.g. claude-sonnet-5, gpt-5.5)"],
     ["--max-turns <n>", "Maximum agent turns per prompt"],
     ["--system-prompt <text>", "Override the system prompt"],
     ["--thinking <level>", "Enable thinking level (low, medium, high, xhigh, max)"],

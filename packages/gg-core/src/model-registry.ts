@@ -33,7 +33,7 @@ export interface ModelInfo {
    * enabled to pick the strongest setting per model:
    *   - OpenAI GPT-5.5-era: `xhigh`
    *   - OpenAI Pro/Codex/old: clamped to what the model accepts
-   *   - Claude Fable 5 / Mythos 5, Opus 4.8 / 4.7 / 4.6 and Sonnet 4.6: `max`
+   *   - Claude Fable 5 / Mythos 5, Opus 4.8 / 4.7 / 4.6 and Sonnet 5: `max`
    *     (Fable 5 / Mythos 5 use always-on adaptive thinking, low→max ladder)
    *   - Claude Haiku 4.5: `high` (no adaptive `max` tier)
    *   - GLM / Moonshot / Xiaomi / MiniMax / Qwen: `high` — binary-thinking
@@ -91,11 +91,11 @@ export const MODELS: ModelInfo[] = [
     maxThinkingLevel: "max",
   },
   {
-    id: "claude-sonnet-4-6",
-    name: "Claude Sonnet 4.6",
+    id: "claude-sonnet-5",
+    name: "Claude Sonnet 5",
     provider: "anthropic",
     contextWindow: 1_000_000,
-    maxOutputTokens: 64_000,
+    maxOutputTokens: 128_000,
     supportsThinking: true,
     supportsImages: true,
     supportsVideo: false,
@@ -405,7 +405,7 @@ export function getDefaultModel(provider: Provider): ModelInfo {
   if (provider === "deepseek") return MODELS.find((m) => m.id === "deepseek-v4-pro")!;
   if (provider === "openrouter") return MODELS.find((m) => m.id === "qwen/qwen3.6-plus")!;
   if (provider === "sakana") return MODELS.find((m) => m.id === "fugu")!;
-  return MODELS.find((m) => m.id === "claude-sonnet-4-6")!;
+  return MODELS.find((m) => m.id === "claude-sonnet-5")!;
 }
 
 export interface ContextWindowOptions {
@@ -436,7 +436,7 @@ export function getMaxThinkingLevel(modelId: string): ThinkingLevel {
 
 /**
  * Get the model to use for compaction summarization.
- * - Anthropic: always Sonnet 4.6
+ * - Anthropic: always Sonnet 5
  * - OpenAI: cheapest (Codex Mini)
  * - Gemini: use the current model
  * - GLM: GLM-4.7 Flash (cheap alternative)
@@ -444,7 +444,7 @@ export function getMaxThinkingLevel(modelId: string): ThinkingLevel {
  */
 export function getSummaryModel(provider: Provider, currentModelId: string): ModelInfo {
   if (provider === "anthropic") {
-    return MODELS.find((m) => m.id === "claude-sonnet-4-6")!;
+    return MODELS.find((m) => m.id === "claude-sonnet-5")!;
   }
   if (provider === "openai" || provider === "glm" || provider === "deepseek") {
     const low = getModelsForProvider(provider).find((m) => m.costTier === "low");

@@ -91,7 +91,7 @@ describe("model registry context windows", () => {
   it("keeps non-OpenAI providers on their model context windows", () => {
     expect(usesOpenAICodexTransport({ provider: "anthropic", accountId: "acct_123" })).toBe(false);
     expect(
-      getContextWindow("claude-sonnet-4-6", { provider: "anthropic", accountId: "acct_123" }),
+      getContextWindow("claude-sonnet-5", { provider: "anthropic", accountId: "acct_123" }),
     ).toBe(1_000_000);
   });
 
