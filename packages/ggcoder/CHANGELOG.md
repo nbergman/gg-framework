@@ -1,5 +1,17 @@
 # @kenkaiiii/ggcoder
 
+## 5.3.0
+
+### Minor Changes
+
+- Add Xiaomi MiMo-V2.5-Pro-UltraSpeed, served over a separate API Credits endpoint. Xiaomi auth now supports both the existing Token Plan key and a new API Credits key — `mimo-v2.5-pro`/`mimo-v2.5` prefer the Token Plan and fall back to API Credits when that's all that's configured, while UltraSpeed requires API Credits. `ggcoder login` and the desktop login modal both let you choose which endpoint to authenticate with.
+
+### Patch Changes
+
+- @kenkaiiii/gg-ai@5.3.0
+- @kenkaiiii/gg-agent@5.3.0
+- @kenkaiiii/gg-core@5.3.0
+
 ## 5.2.0
 
 ### Minor Changes
