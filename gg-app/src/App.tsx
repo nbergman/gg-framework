@@ -28,7 +28,6 @@ import {
   windowLabel,
   setWindowTitle,
   openProjectPath,
-  type SidecarEvent,
   type AgentState,
   type ModelOption,
   type SlashCommand,
@@ -39,9 +38,11 @@ import {
   enhancePrompt,
   type PromptSegment,
 } from "./agent";
-import { ActivityBar, formatTokenCount } from "./ActivityBar";
+import { ActivityBar } from "./ActivityBar";
 import { KenActivityBar } from "./KenActivityBar";
-import { LiveToolPanel, type LiveToolEntry, LIVE_TOOL_PANEL_ROWS } from "./LiveToolPanel";
+import { useKenMentor } from "./useKenMentor";
+import { useAgentEvents, HOOK_PRESENTATION, type HookKind } from "./useAgentEvents";
+import { LiveToolPanel, type LiveToolEntry } from "./LiveToolPanel";
 import { SubAgentFeed, type SubAgentLine } from "./SubAgentFeed";
 import { CompactionNotice } from "./CompactionNotice";
 import { ModelMenu } from "./ModelMenu";
@@ -72,12 +73,7 @@ import { FooterSkeleton, TranscriptSkeleton, Skeleton } from "./Skeleton";
 import { useAppUpdate } from "./update";
 import { recoverPromptLabel } from "./prompt-labels";
 import { playSound } from "./sounds";
-import {
-  segmentDoneMarkers,
-  hasDoneMarker,
-  countPlanSteps,
-  findCompletedSteps,
-} from "./plan-steps";
+import { segmentDoneMarkers, hasDoneMarker, countPlanSteps } from "./plan-steps";
 import { Paperclip, AtSign } from "lucide-react";
 import { AttachmentBar } from "./AttachmentBar";
 import { EnhancedSegments } from "./PromptEnhancement";
@@ -88,7 +84,9 @@ import "./App.css";
 
 // ── Transcript model ───────────────────────────────────────
 // Tool activity lives in the pinned LiveToolPanel, never in the transcript.
-type Item =
+// Exported (type-only) so the Ken mentor hook can produce/typecheck ken + error
+// transcript items without a runtime import cycle.
+export type Item =
   // `command` marks a workflow slash command — rendered as just the short
   // `/name` with a highlight + shimmer, never the expanded prompt body.
   // `label` overrides what's shown with a friendly shimmer phrase (e.g.
@@ -153,30 +151,6 @@ export interface TranscriptImage {
   path?: string;
 }
 
-/** Tool detail image preview (screenshot / read), mirrors the sidecar shape. */
-interface ImagePreview {
-  base64: string;
-  mediaType: string;
-  path?: string;
-}
-
-// Hook kind → notice copy + tone color, mirroring the TUI's app-items.ts.
-type HookKind = "ideal" | "loop_break" | "regrounding";
-const HOOK_PRESENTATION: Record<HookKind, { text: string; color: string }> = {
-  ideal: {
-    text: "Hook engaged. Running an ideal review before finalizing.",
-    color: theme.secondary,
-  },
-  loop_break: {
-    text: "Hook engaged. Breaking a stuck loop and rethinking the approach.",
-    color: theme.warning,
-  },
-  regrounding: {
-    text: "Hook engaged. Re-grounding on the original request after compaction.",
-    color: theme.primary,
-  },
-};
-
 let idSeq = 0;
 const nextId = (): number => ++idSeq;
 
@@ -212,59 +186,24 @@ function thinkingColor(level: string | null | undefined): string {
   return MAX_POWER_COLOR; // xhigh / max
 }
 
-function formatElapsed(ms: number): string {
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return r > 0 ? `${m}m ${r}s` : `${m}m`;
-}
-
-// Port of packages/ggcoder/src/ui/duration-summary.ts, adapted to the sidecar's
-// underscore tool names. Picks a contextual done-verb from which tools ran.
-function pickDoneVerb(toolsUsed: ReadonlySet<string>): string {
-  const has = (name: string): boolean => toolsUsed.has(name);
-  const writing = has("edit") || has("write");
-  const reading = has("read") || has("grep") || has("find") || has("ls");
-
-  if (has("subagent") && writing) return "Orchestrated changes in";
-  if (has("subagent")) return "Delegated work in";
-  if (has("web_fetch") && writing) return "Researched & coded in";
-  if (has("web_fetch") && reading) return "Researched in";
-  if (has("web_fetch")) return "Fetched the web in";
-  if (has("bash") && writing) return "Built & ran in";
-  if (has("edit") && has("write")) return "Crafted code in";
-  if (has("edit") && has("bash")) return "Refactored & tested in";
-  if (has("edit")) return "Refactored in";
-  if (has("write") && has("bash")) return "Wrote & ran in";
-  if (has("write")) return "Wrote code in";
-  if (has("bash") && has("grep")) return "Hacked away in";
-  if (has("bash") && reading) return "Ran & investigated in";
-  if (has("bash")) return "Executed commands in";
-  if (has("grep") && has("read")) return "Investigated in";
-  if (has("grep") && has("find")) return "Scoured the codebase in";
-  if (has("grep")) return "Searched in";
-  if (has("read") && has("find")) return "Explored in";
-  if (has("read")) return "Studied the code in";
-  if (has("find") || has("ls")) return "Browsed files in";
-
-  const phrases = [
-    "Brewed up a response in",
-    "Cooked up an answer in",
-    "Worked out a reply in",
-    "Conjured a response in",
-    "Pondered for",
-    "Reasoned for",
-  ];
-  return phrases[Math.floor(Math.random() * phrases.length)] ?? "Worked in";
-}
-
 function hasDraggedFiles(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
 }
 
 function App(): React.ReactElement {
   const [items, setItems] = useState<Item[]>([]);
+  // Ken Kai (mentor agent): own running flag, token/thinking metrics, streaming
+  // bubble, and `ken_*` SSE handling. Lives in its own hook; App just consumes
+  // the state for rendering and delegates ken events to `handleKenEvent`.
+  const {
+    kenRunning,
+    kenTokens,
+    kenRunStartTs,
+    kenIsThinking,
+    kenThinkingStartTs,
+    kenThinkingAccumMs,
+    handleKenEvent,
+  } = useKenMentor({ setItems, nextId });
   const [input, setInput] = useState("");
   // Shell-style prompt history for ↑/↓ recall in the chat input. Newest entries
   // last. `historyIndex` is null while editing a fresh draft; stepping ↑ walks
@@ -303,19 +242,6 @@ function App(): React.ReactElement {
   const [queuedCount, setQueuedCount] = useState(0);
   const [state, setState] = useState<AgentState | null>(null);
   const [running, setRunning] = useState(false);
-  // True while Ken Kai (the mentor agent) is thinking. Independent of `running`
-  // so Ken can stream concurrently with a GG Coder build run.
-  const [kenRunning, setKenRunning] = useState(false);
-  // Ken's own activity metrics, mirroring the build session's so Ken's activity
-  // bar shows the SAME elapsed/tokens/thinking readout (just tinted to Ken).
-  const [kenTokens, setKenTokens] = useState(0);
-  const [kenRunStartTs, setKenRunStartTs] = useState<number | null>(null);
-  const [kenIsThinking, setKenIsThinking] = useState(false);
-  const [kenThinkingStartTs, setKenThinkingStartTs] = useState<number | null>(null);
-  const [kenThinkingAccumMs, setKenThinkingAccumMs] = useState(0);
-  const kenTokensRef = useRef(0);
-  const kenThinkingStartRef = useRef<number | null>(null);
-  const kenThinkingAccumRef = useRef(0);
   const [status, setStatus] = useState("connecting to agent\u2026");
   const [liveToolFeed, setLiveToolFeed] = useState<LiveToolEntry[]>([]);
   const [tokens, setTokens] = useState(0);
@@ -450,27 +376,11 @@ function App(): React.ReactElement {
   const stateRef = useRef<AgentState | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const streamingIdRef = useRef<number | null>(null);
-  // Id of the active Ken streaming bubble (null when Ken isn't streaming).
-  const kenStreamingIdRef = useRef<number | null>(null);
-  // Transcript id of the active sub-agent group for this run (null until the
-  // first subagent spawns). Lets later parallel agents join the same in-chat
-  // feed instead of each opening a fresh block.
-  const subagentGroupIdRef = useRef<number | null>(null);
-  // Transcript id of the in-flight compaction notice, so compaction_end can
-  // flip the same row from shimmer → summary instead of pushing a new line.
-  const compactionIdRef = useRef<number | null>(null);
-  const runStartRef = useRef<number>(0);
-  const toolsUsedRef = useRef<Set<string>>(new Set());
-  const tokensRef = useRef<number>(0);
-  // Accumulated assistant text this run, for detecting [DONE:n] plan-step
-  // markers that may split across deltas.
-  const assistantTextRef = useRef<string>("");
-  // Thinking spans: start timestamp of the active span (or null), plus the sum
-  // of completed spans this run. Refs are the source of truth; state mirrors
-  // them for render. Finalizing a span happens outside setState updaters.
-  const thinkingStartRef = useRef<number | null>(null);
-  const thinkingAccumRef = useRef<number>(0);
+  // NOTE: the build-session event machine's private refs (streaming bubble id,
+  // rAF buffer, per-run accumulators, sub-agent / compaction group ids) now live
+  // inside the useAgentEvents hook. Only the cross-cutting refs that App's render
+  // + other handlers also touch (stateRef above, the plan refs + stickToBottom
+  // below) stay here and are passed into the hook.
 
   // Whether the transcript is "pinned" to the bottom. Auto-scroll only runs
   // while pinned. The user scrolling up un-pins it — so they can read freely
@@ -712,655 +622,42 @@ function App(): React.ReactElement {
     return () => document.removeEventListener("click", onClick, true);
   }, []);
 
-  // Side effects (nextId, ref mutation) happen outside the updater — updaters
-  // must stay pure since React may invoke them more than once.
-  //
-  // Throttled via requestAnimationFrame: text_delta events arrive at 50-100/sec.
-  // Without throttling, each triggers a full React re-render + markdown re-parse.
-  // We buffer chunks in a ref and flush once per animation frame (~16ms),
-  // reducing re-renders by 5-10× with no visible difference.
-  const pendingChunksRef = useRef<string>("");
-  const rafIdRef = useRef<number | null>(null);
-
-  const flushChunks = useCallback(() => {
-    rafIdRef.current = null;
-    const chunk = pendingChunksRef.current;
-    if (!chunk) return;
-    pendingChunksRef.current = "";
-    const current = streamingIdRef.current;
-    if (current === null) return; // streaming ended while waiting
-    setItems((prev) =>
-      prev.map((it) =>
-        it.kind === "assistant" && it.id === current ? { ...it, text: it.text + chunk } : it,
-      ),
-    );
-  }, []);
-
-  const appendAssistant = useCallback(
-    (text: string) => {
-      const current = streamingIdRef.current;
-      if (current === null) {
-        // First token of a new assistant turn: create immediately (no delay
-        // on first paint — the user should see the bubble appear right away).
-        const id = nextId();
-        streamingIdRef.current = id;
-        setItems((prev) => [...prev, { kind: "assistant", id, text }]);
-      } else {
-        // Subsequent tokens: buffer and flush via rAF
-        pendingChunksRef.current += text;
-        if (rafIdRef.current === null) {
-          rafIdRef.current = requestAnimationFrame(flushChunks);
-        }
-      }
-    },
-    [flushChunks],
-  );
-
-  // Flush any pending buffered text and end the current streaming section.
-  // Called whenever streaming transitions to tool calls, a new prompt, etc.
-  // Without this, the last few buffered tokens (waiting for rAF) would be lost.
-  const endStreamingText = useCallback(() => {
-    if (rafIdRef.current !== null) {
-      cancelAnimationFrame(rafIdRef.current);
-      rafIdRef.current = null;
-    }
-    if (pendingChunksRef.current) {
-      const chunk = pendingChunksRef.current;
-      pendingChunksRef.current = "";
-      const current = streamingIdRef.current;
-      if (current !== null) {
-        setItems((prev) =>
-          prev.map((it) =>
-            it.kind === "assistant" && it.id === current ? { ...it, text: it.text + chunk } : it,
-          ),
-        );
-      }
-    }
-    streamingIdRef.current = null;
-  }, []);
-
-  // Ken's streaming bubble. Ken's replies are short, so a direct setItems per
-  // delta (no rAF buffering) is fine and keeps his path independent of GG
-  // Coder's. First delta creates the magenta bubble; later deltas append to it.
-  const appendKen = useCallback((text: string) => {
-    const current = kenStreamingIdRef.current;
-    if (current === null) {
-      const id = nextId();
-      kenStreamingIdRef.current = id;
-      setItems((prev) => [...prev, { kind: "ken", id, text }]);
-    } else {
-      setItems((prev) =>
-        prev.map((it) =>
-          it.kind === "ken" && it.id === current ? { ...it, text: it.text + text } : it,
-        ),
-      );
-    }
-  }, []);
-
-  // Ends the CURRENT Ken streaming bubble (also called mid-turn on tool calls to
-  // break the bubble so post-tool text starts a fresh paragraph).
-  const endKenStreaming = useCallback(() => {
-    kenStreamingIdRef.current = null;
-  }, []);
-
-  // Close Ken's open thinking span (if any), folding its duration into the
-  // accumulator. Mirrors the build's finalizeThinking. Called when text or a
-  // tool begins, or the run ends, so the thinking timer doesn't over-count.
-  const finalizeKenThinking = useCallback(() => {
-    if (kenThinkingStartRef.current !== null) {
-      kenThinkingAccumRef.current += Date.now() - kenThinkingStartRef.current;
-      kenThinkingStartRef.current = null;
-      setKenThinkingAccumMs(kenThinkingAccumRef.current);
-      setKenThinkingStartTs(null);
-    }
-    setKenIsThinking(false);
-  }, []);
-
-  const pushItem = useCallback((item: Item) => {
-    setItems((prev) => [...prev, item]);
-  }, []);
-
-  // End the active thinking span (if any), folding its duration into the
-  // accumulator. Called when text/tools begin or the run ends. Side effects on
-  // refs happen here, outside any setState updater, keeping updaters pure.
-  const finalizeThinking = useCallback(() => {
-    const start = thinkingStartRef.current;
-    if (start !== null) {
-      thinkingAccumRef.current += Date.now() - start;
-      thinkingStartRef.current = null;
-      setThinkingAccumMs(thinkingAccumRef.current);
-      setThinkingStartTs(null);
-    }
-    setIsThinking(false);
-  }, []);
-
-  const handleEvent = useCallback(
-    (e: SidecarEvent) => {
-      const d = e.data as Record<string, unknown>;
-      switch (e.type) {
-        case "ready":
-          setState(d as unknown as AgentState);
-          setTasks((d.tasks as BackgroundTask[] | undefined) ?? []);
-          setStatus("ready");
-          break;
-        case "run_start":
-          setRunning(true);
-          endStreamingText();
-          subagentGroupIdRef.current = null;
-          compactionIdRef.current = null;
-          runStartRef.current = Date.now();
-          toolsUsedRef.current = new Set();
-          tokensRef.current = 0;
-          assistantTextRef.current = "";
-          thinkingStartRef.current = null;
-          thinkingAccumRef.current = 0;
-          setLiveToolFeed([]);
-          setTokens(0);
-          setDoneStatus(null);
-          setIsThinking(false);
-          setThinkingStartTs(null);
-          setThinkingAccumMs(0);
-          setStatus("thinking\u2026");
-          break;
-        case "thinking_delta": {
-          if (thinkingStartRef.current === null) {
-            const now = Date.now();
-            thinkingStartRef.current = now;
-            setThinkingStartTs(now);
-            setIsThinking(true);
-          }
-          break;
-        }
-        case "text_delta": {
-          finalizeThinking();
-          const chunk = String(d.text ?? "");
-          appendAssistant(chunk);
-          // Track plan-step completion for the activity bar. Accumulate the
-          // run's assistant text (markers can split across deltas) and union in
-          // any [DONE:n] step numbers seen so far.
-          assistantTextRef.current += chunk;
-          const done = findCompletedSteps(assistantTextRef.current);
-          if (done.length > 0) {
-            const next = new Set(planDoneRef.current);
-            for (const n of done) {
-              if (n >= 1 && n <= planTotalRef.current) next.add(n);
-            }
-            if (next.size !== planDoneRef.current.size) {
-              planDoneRef.current = next;
-              setPlanDone(next);
-            }
-          }
-          break;
-        }
-        case "server_tool_call": {
-          // Native server tools (e.g. Anthropic web_search) stream text both
-          // before and after them within the SAME turn. End the current
-          // assistant bubble so the post-tool text starts a fresh paragraph
-          // instead of gluing onto the pre-tool text ("…command.Let me pull…").
-          finalizeThinking();
-          endStreamingText();
-          assistantTextRef.current = "";
-          break;
-        }
-        case "tool_call_start": {
-          finalizeThinking();
-          endStreamingText();
-          const toolCallId = String(d.toolCallId ?? "");
-          const name = String(d.name ?? "tool");
-          const args = (d.args as Record<string, unknown>) ?? {};
-          toolsUsedRef.current.add(name);
-          // Tools live ONLY in the pinned panel, never in the transcript. Keep a
-          // bounded tail so memory stays flat across long sessions; the panel
-          // itself renders just the last LIVE_TOOL_PANEL_ROWS.
-          setLiveToolFeed((prev) =>
-            [...prev, { toolCallId, name, args, status: "running" as const }].slice(
-              -(LIVE_TOOL_PANEL_ROWS * 2),
-            ),
-          );
-          // Sub-agents also get a persistent, live feed in the transcript so the
-          // user can watch parallel delegations by name + what each is doing.
-          if (name === "subagent") {
-            const newAgent: SubAgentLine = {
-              toolCallId,
-              agentName: typeof args.agent === "string" ? args.agent : undefined,
-              status: "running",
-              activities: [],
-              toolUseCount: 0,
-              tokenUsage: { input: 0, output: 0 },
-            };
-            const groupId = subagentGroupIdRef.current;
-            if (groupId !== null) {
-              setItems((prev) =>
-                prev.map((it) =>
-                  it.kind === "subagent_group" && it.id === groupId
-                    ? { ...it, agents: [...it.agents, newAgent] }
-                    : it,
-                ),
-              );
-            } else {
-              const id = nextId();
-              subagentGroupIdRef.current = id;
-              endStreamingText();
-              pushItem({ kind: "subagent_group", id, agents: [newAgent] });
-            }
-          }
-          // Image generation: show a shimmering square placeholder while the
-          // tool runs. It gets replaced by the real image on tool_call_end.
-          if (name === "generate_image") {
-            const prompt = typeof args.prompt === "string" ? args.prompt : "generating image…";
-            endStreamingText();
-            pushItem({ kind: "generating_image", id: nextId(), prompt });
-          }
-          break;
-        }
-        case "tool_call_update": {
-          // Live progress from a running sub-agent (toolUseCount + the tool it's
-          // currently running). Append distinct activities into its feed.
-          const id = String(d.toolCallId ?? "");
-          const update = d.update as
-            | {
-                toolUseCount?: number;
-                currentActivity?: string;
-                tokenUsage?: { input: number; output: number };
-              }
-            | undefined;
-          const groupId = subagentGroupIdRef.current;
-          if (!update || groupId === null) break;
-          const activity = update.currentActivity;
-          setItems((prev) =>
-            prev.map((it) => {
-              if (it.kind !== "subagent_group" || it.id !== groupId) return it;
-              return {
-                ...it,
-                agents: it.agents.map((a) => {
-                  if (a.toolCallId !== id) return a;
-                  const last = a.activities[a.activities.length - 1];
-                  const activities =
-                    activity && activity !== last ? [...a.activities, activity] : a.activities;
-                  return {
-                    ...a,
-                    toolUseCount: update.toolUseCount ?? a.toolUseCount,
-                    tokenUsage: update.tokenUsage ?? a.tokenUsage,
-                    activities: activities.slice(-12),
-                  };
-                }),
-              };
-            }),
-          );
-          break;
-        }
-        case "tool_call_end": {
-          const id = String(d.toolCallId ?? "");
-          const isError = Boolean(d.isError);
-          const result = typeof d.result === "string" ? d.result : undefined;
-          const details = d.details;
-          // Finalize a sub-agent's in-chat row: flip status + record duration.
-          const groupId = subagentGroupIdRef.current;
-          if (groupId !== null) {
-            const endDetails = details as
-              | { durationMs?: number; tokenUsage?: { input: number; output: number } }
-              | undefined;
-            const durationMs = endDetails?.durationMs;
-            const finalTokens = endDetails?.tokenUsage;
-            setItems((prev) =>
-              prev.map((it) => {
-                // Only the active group, and only when the ended tool is actually
-                // one of its agents (tool_call_end carries no name to filter on).
-                if (it.kind !== "subagent_group" || it.id !== groupId) return it;
-                if (!it.agents.some((a) => a.toolCallId === id)) return it;
-                return {
-                  ...it,
-                  agents: it.agents.map((a) =>
-                    a.toolCallId === id
-                      ? {
-                          ...a,
-                          status: isError ? ("error" as const) : ("done" as const),
-                          durationMs: durationMs ?? a.durationMs,
-                          tokenUsage: finalTokens ?? a.tokenUsage,
-                        }
-                      : a,
-                  ),
-                };
-              }),
-            );
-          }
-          // Update the entry in place to its done state — it stays in the pinned
-          // panel (mirrors ggcoder), it does NOT move into the transcript.
-          setLiveToolFeed((prev) =>
-            prev.map((entry) =>
-              entry.toolCallId === id
-                ? { ...entry, status: "done" as const, isError, result, details }
-                : entry,
-            ),
-          );
-          // Remove any generating_image placeholders — the tool has finished
-          // (success or failure). If it produced images, they're pushed below.
-          setItems((prev) => prev.filter((it) => it.kind !== "generating_image"));
-          // Surface any image previews (screenshot / read of an image) inline in
-          // the transcript — the tool panel is text-only.
-          const previews = (details as { imagePreviews?: ImagePreview[] } | undefined)
-            ?.imagePreviews;
-          if (Array.isArray(previews) && previews.length > 0) {
-            endStreamingText();
-            pushItem({
-              kind: "images",
-              id: nextId(),
-              images: previews.map((p) => ({
-                src: `data:${p.mediaType};base64,${p.base64}`,
-                path: p.path,
-              })),
-            });
-          }
-          break;
-        }
-        case "turn_end": {
-          const usage = d.usage as
-            | {
-                inputTokens?: number;
-                outputTokens?: number;
-                cacheRead?: number;
-                cacheWrite?: number;
-              }
-            | undefined;
-          if (usage && typeof usage.outputTokens === "number") {
-            tokensRef.current += usage.outputTokens;
-            setTokens(tokensRef.current);
-          }
-          // Context-window usage (footer meter). Mirrors ggcoder: Anthropic has
-          // separate input/output limits so only the input side counts; every
-          // other provider shares one window, so add the output too.
-          if (usage) {
-            const inputContext =
-              (usage.inputTokens ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-            const isAnthropic = stateRef.current?.provider === "anthropic";
-            setContextTokens(inputContext + (isAnthropic ? 0 : (usage.outputTokens ?? 0)));
-          }
-          break;
-        }
-        case "agent_done": {
-          const usage = d.totalUsage as { outputTokens?: number } | undefined;
-          if (usage && typeof usage.outputTokens === "number") {
-            // Authoritative final total — set rather than add to avoid
-            // double-counting the per-turn accumulation above.
-            if (usage.outputTokens > tokensRef.current) {
-              tokensRef.current = usage.outputTokens;
-              setTokens(tokensRef.current);
-            }
-          }
-          break;
-        }
-        case "compaction_start": {
-          const id = nextId();
-          compactionIdRef.current = id;
-          endStreamingText();
-          pushItem({ kind: "compaction", id, status: "running" });
-          break;
-        }
-        case "compaction_end": {
-          const originalCount = typeof d.originalCount === "number" ? d.originalCount : undefined;
-          const newCount = typeof d.newCount === "number" ? d.newCount : undefined;
-          const id = compactionIdRef.current;
-          compactionIdRef.current = null;
-          setItems((prev) =>
-            prev.map((it) =>
-              it.kind === "compaction" && it.id === id
-                ? { ...it, status: "done" as const, originalCount, newCount }
-                : it,
-            ),
-          );
-          break;
-        }
-        case "error":
-          pushItem({
-            kind: "error",
-            id: nextId(),
-            text: `error: ${String(d.message ?? "unknown")}`,
-          });
-          break;
-        case "run_end": {
-          setRunning(false);
-          endStreamingText();
-          finalizeThinking();
-          // The queue drained into this run — un-dim any messages that were
-          // waiting, since the agent has now consumed them.
-          setItems((prev) =>
-            prev.map((it) => (it.kind === "user" && it.queued ? { ...it, queued: false } : it)),
-          );
-          // Exit the tool panel (mirrors ggcoder).
-          setLiveToolFeed([]);
-          // Safety: clear any lingering image-generation placeholders in case
-          // tool_call_end didn't fire (e.g. hard cancel mid-fetch).
-          setItems((prev) => prev.filter((it) => it.kind !== "generating_image"));
-          // Mark any still-running sub-agents in this run's group as aborted.
-          const saGroupId = subagentGroupIdRef.current;
-          if (saGroupId !== null) {
-            setItems((prev) =>
-              prev.map((it) =>
-                it.kind === "subagent_group" && it.id === saGroupId
-                  ? {
-                      ...it,
-                      aborted: d.cancelled ? true : it.aborted,
-                      agents: it.agents.map((a) =>
-                        a.status === "running"
-                          ? { ...a, status: d.cancelled ? ("error" as const) : ("done" as const) }
-                          : a,
-                      ),
-                    }
-                  : it,
-              ),
-            );
-          }
-          subagentGroupIdRef.current = null;
-          if (d.cancelled) {
-            setDoneStatus(null);
-            setStatus("cancelled");
-          } else {
-            const elapsedMs = runStartRef.current ? Date.now() - runStartRef.current : 0;
-            const verb = pickDoneVerb(toolsUsedRef.current);
-            const parts = [`${verb} ${formatElapsed(elapsedMs)}`];
-            if (tokensRef.current > 0) {
-              parts.push(`\u2193 ${formatTokenCount(tokensRef.current)} tokens`);
-            }
-            setDoneStatus(parts.join(" \u2022 "));
-            setStatus("ready");
-            const completedPlan =
-              planTotalRef.current > 0 &&
-              Array.from({ length: planTotalRef.current }, (_, i) => i + 1).every((step) =>
-                planDoneRef.current.has(step),
-              );
-            if (completedPlan) {
-              planTotalRef.current = 0;
-              planDoneRef.current = new Set();
-              setPlanTotal(0);
-              setPlanDone(new Set());
-            }
-            playSound("done");
-            // A run may have created/removed `.gg/commands/*.md` (e.g.
-            // /setup-commit writing commit.md). Refresh so the top-right
-            // commit button flips /setup-commit → /commit without a restart.
-            void listCommands().then((cmds) => {
-              if (cmds.length > 0) setCommands(cmds);
-            });
-          }
-          break;
-        }
-        case "model_change":
-          setState((s) => (s ? { ...s, ...(d as Partial<AgentState>) } : s));
-          break;
-        case "thinking_change":
-          setState((s) =>
-            s
-              ? {
-                  ...s,
-                  thinkingLevel: (d.thinkingLevel as string | null) ?? null,
-                  supportedThinkingLevels: (d.supportedThinkingLevels as string[]) ?? [],
-                }
-              : s,
-          );
-          break;
-        case "plan_enter":
-          setState((s) => (s ? { ...s, planMode: true } : s));
-          pushItem({ kind: "plan", id: nextId(), reason: String(d.reason ?? "") });
-          break;
-        case "plan_exit":
-          setState((s) => (s ? { ...s, planMode: false } : s));
-          // Open the review modal (Accept / Feedback / Reject) with the plan, and
-          // stash its path so accept can bake it into the system prompt.
-          planReviewPathRef.current = typeof d.planPath === "string" ? d.planPath : null;
-          setPlanReview(String(d.content ?? ""));
-          break;
-        case "tasks":
-          setTasks((d.tasks as BackgroundTask[] | undefined) ?? []);
-          break;
-        case "tasks_list":
-          // Project task list refresh (run-all advance, status flips).
-          setProjectTasks((d.tasks as ProjectTask[] | undefined) ?? []);
-          break;
-        case "task_start":
-          // A task run just opened a fresh session; show its title at the top of
-          // the (already-cleared) transcript so the user sees what's running.
-          pushItem({ kind: "task", id: nextId(), title: String(d.title ?? "") });
-          break;
-        case "tasks_run_done":
-          // Run-all sweep finished — nothing to render; the modal reflects it.
-          break;
-        case "queued":
-          setQueuedCount(Number(d.count ?? 0));
-          break;
-        case "hook": {
-          const kind = String(d.kind ?? "ideal") as HookKind;
-          if (kind in HOOK_PRESENTATION) {
-            endStreamingText();
-            pushItem({ kind: "hook", id: nextId(), hook: kind });
-          }
-          break;
-        }
-        case "session_reset":
-          // Sidecar started a fresh session — clear the transcript + counters.
-          stickToBottomRef.current = true;
-          setItems([]);
-          setLiveToolFeed([]);
-          setTokens(0);
-          setDoneStatus(null);
-          setContextTokens(0);
-          setSessionTitle(null);
-          setPlanReview(null);
-          {
-            // On an accept-driven reset, restore the approved plan's step count
-            // instead of zeroing it (the widget tracks the implementation run).
-            const carriedTotal = pendingPlanTotalRef.current ?? 0;
-            pendingPlanTotalRef.current = null;
-            planTotalRef.current = carriedTotal;
-            planDoneRef.current = new Set();
-            setPlanTotal(carriedTotal);
-            setPlanDone(new Set());
-          }
-          setAttachments([]);
-          setQueuedCount(0);
-          endStreamingText();
-          subagentGroupIdRef.current = null;
-          break;
-        case "session_title":
-          setSessionTitle(String(d.title ?? "") || null);
-          break;
-        case "extras":
-          // Context window / git branch refresh (model switch, run end).
-          setState((s) =>
-            s
-              ? {
-                  ...s,
-                  contextWindow: (d.contextWindow as number | undefined) ?? s.contextWindow,
-                  gitBranch: (d.gitBranch as string | null | undefined) ?? s.gitBranch,
-                  isGitRepo: (d.isGitRepo as boolean | undefined) ?? s.isGitRepo,
-                }
-              : s,
-          );
-          setTasks((d.tasks as BackgroundTask[] | undefined) ?? []);
-          break;
-
-        // ── Ken Kai (mentor agent) ──────────────────────────────
-        // Separate event family so Ken's reply renders in its own magenta
-        // bubble and never touches GG Coder's streaming bubble / tool feed.
-        case "ken_run_start":
-          setKenRunning(true);
-          endKenStreaming();
-          // Reset Ken's activity metrics for this run (mirrors the build run_start).
-          kenTokensRef.current = 0;
-          kenThinkingStartRef.current = null;
-          kenThinkingAccumRef.current = 0;
-          setKenTokens(0);
-          setKenRunStartTs(Date.now());
-          setKenIsThinking(false);
-          setKenThinkingStartTs(null);
-          setKenThinkingAccumMs(0);
-          break;
-        case "ken_text_delta":
-          // First visible output ends any thinking span (mirrors finalizeThinking).
-          finalizeKenThinking();
-          appendKen(String(d.text ?? ""));
-          break;
-        case "ken_thinking_delta":
-          if (kenThinkingStartRef.current === null) {
-            const now = Date.now();
-            kenThinkingStartRef.current = now;
-            setKenThinkingStartTs(now);
-            setKenIsThinking(true);
-          }
-          break;
-        // A tool runs mid-turn: end Ken's current bubble so text streamed AFTER
-        // the tool starts a fresh paragraph instead of gluing onto the pre-tool
-        // text ("...work.Local tools..."). Mirrors the build session's
-        // tool_call_start / server_tool_call handling. Covers both client tools
-        // (read/grep/kencode-search) and Anthropic's native server web_search.
-        case "ken_tool_call_start":
-        case "ken_server_tool_call":
-          // Close any open thinking span (mirrors the build's finalizeThinking on
-          // tool_call_start) so the timer doesn't keep counting while a tool runs.
-          finalizeKenThinking();
-          endKenStreaming();
-          break;
-        case "ken_turn_end": {
-          const usage = d.usage as { outputTokens?: number } | undefined;
-          if (usage && typeof usage.outputTokens === "number") {
-            kenTokensRef.current += usage.outputTokens;
-            setKenTokens(kenTokensRef.current);
-          }
-          break;
-        }
-        case "ken_run_end":
-          setKenRunning(false);
-          endKenStreaming();
-          // Close any open thinking span so the final readout is accurate.
-          finalizeKenThinking();
-          setKenRunStartTs(null);
-          break;
-        case "ken_error":
-          setKenRunning(false);
-          endKenStreaming();
-          setKenIsThinking(false);
-          setKenRunStartTs(null);
-          pushItem({
-            kind: "error",
-            id: nextId(),
-            text: `Ken: ${String(d.message ?? "unknown")}`,
-          });
-          break;
-        // ken_tool_call_update / ken_tool_call_end carry Ken's read-only tool
-        // activity; the activity bar (kenRunning) is the indicator, so they need
-        // no transcript row. (ken_tool_call_start IS handled above to break the
-        // streaming bubble around mid-turn tool calls.)
-      }
-    },
-    [
-      appendAssistant,
-      appendKen,
-      endKenStreaming,
-      finalizeKenThinking,
-      pushItem,
-      finalizeThinking,
-      endStreamingText,
-    ],
-  );
+  // Build-session SSE handling + assistant-streaming helpers live in the
+  // useAgentEvents hook (mirrors useKenMentor). It owns the event machine's
+  // private refs + the streaming helpers; App keeps owning the build-session
+  // state (its render + other handlers use it) and passes the setters +
+  // cross-cutting refs in. App consumes `handleEvent` (for the SSE subscription)
+  // and the two helpers it still calls directly (`pushItem`, `endStreamingText`).
+  const { handleEvent, pushItem, endStreamingText } = useAgentEvents({
+    setItems,
+    nextId,
+    handleKenEvent,
+    setState,
+    setTasks,
+    setProjectTasks,
+    setStatus,
+    setRunning,
+    setLiveToolFeed,
+    setTokens,
+    setContextTokens,
+    setDoneStatus,
+    setIsThinking,
+    setThinkingStartTs,
+    setThinkingAccumMs,
+    setPlanTotal,
+    setPlanDone,
+    setSessionTitle,
+    setPlanReview,
+    setQueuedCount,
+    setAttachments,
+    setCommands,
+    stateRef,
+    planDoneRef,
+    planTotalRef,
+    planReviewPathRef,
+    pendingPlanTotalRef,
+    stickToBottomRef,
+  });
 
   // Run the connect/ready flow against the current sidecar and hydrate state,
   // models, and commands. Re-invoked after a project switch respawns the
