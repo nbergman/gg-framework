@@ -945,7 +945,20 @@ async function createSession(
   let kenSession: AgentSession | null = null;
   let kenAbort = new AbortController();
   let kenRunning = false;
+  let pendingKenModel: { provider: Provider; model: string } | null = null;
   const kenToolCallNames = new Map<string, string>();
+
+  async function syncKenModel(provider: Provider, model: string): Promise<void> {
+    if (kenRunning) {
+      pendingKenModel = { provider, model };
+      return;
+    }
+    if (!kenSession) return;
+    const st = kenSession.getState();
+    if (st.provider === provider && st.model === model) return;
+    await kenSession.switchModel(provider, model);
+    log("INFO", "app-sidecar", "ken session model synced", { provider, model });
+  }
 
   async function ensureKenSession(): Promise<AgentSession> {
     if (kenSession) return kenSession;
@@ -1618,6 +1631,9 @@ async function createSession(
         } finally {
           kenRunning = false;
           broadcast("ken_run_end", {});
+          const pending = pendingKenModel;
+          pendingKenModel = null;
+          if (pending) await syncKenModel(pending.provider, pending.model);
         }
       });
       return;
@@ -1781,6 +1797,7 @@ async function createSession(
           return;
         }
         await session.switchModel(target.provider, target.id);
+        await syncKenModel(target.provider, target.id);
         // Clamp the reasoning level to what the new model supports (mirrors the
         // CLI): keep thinking on at the first supported tier if it was on but
         // the prior level is unsupported here; leave it off if it was off.
