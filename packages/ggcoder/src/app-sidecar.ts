@@ -50,6 +50,7 @@ import { discoverProjects, listRecentSessions } from "./core/project-discovery.j
 import {
   loadTasksSync,
   saveTasksSync,
+  pruneDoneTasksSync,
   getNextPendingTask,
   markTaskInProgress,
 } from "./core/tasks-store.js";
@@ -1056,6 +1057,10 @@ async function createSession(
       gitBranch = await getGitBranch(cwd).catch(() => gitBranch);
       gitIsRepo = await isGitRepo(cwd).catch(() => gitIsRepo);
       broadcast("run_end", {});
+      // The agent may have marked project tasks done during the run — prune the
+      // completed ones so they drop out of the Tasks modal automatically (users
+      // never have to delete finished tasks by hand).
+      broadcast("tasks_list", { tasks: pruneDoneTasksSync(cwd) });
       // Queue drains into the run as steering, so it's empty by run_end —
       // sync the webview indicator.
       broadcast("queued", { count: session.getQueuedCount() });
@@ -1093,8 +1098,8 @@ async function createSession(
       `tasks({ action: "done", id: "${shortId}" })`;
     await runAgent(task.title, () => session.prompt(task.prompt + completionHint));
     // The agent typically marks the task done via the tasks tool during the run;
-    // push the refreshed list so the webview's task modal reflects it.
-    broadcast("tasks_list", { tasks: loadTasksSync(cwd) });
+    // prune completed tasks and push the refreshed list so the modal drops them.
+    broadcast("tasks_list", { tasks: pruneDoneTasksSync(cwd) });
     return true;
   }
 
@@ -1695,7 +1700,7 @@ async function createSession(
     }
 
     if (method === "GET" && url === "/tasks") {
-      json(res, 200, { tasks: loadTasksSync(cwd) });
+      json(res, 200, { tasks: pruneDoneTasksSync(cwd) });
       return;
     }
 
