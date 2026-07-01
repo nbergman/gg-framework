@@ -22,6 +22,15 @@ export interface ChangelogEntry {
 /** Newest first. Prepended by the `/release` flow. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.10.3",
+    date: "2026-07-02",
+    items: [
+      "Your helper agents just got a lot more capable. I gave them room to run five times longer, so instead of quitting halfway through a real job they now see it all the way to the finish. And if one ever does run out of road, it tells you straight up instead of handing back a mysterious blank.",
+      "Read-only agents are now genuinely read-only. When I send a scout out to explore your code, it physically cannot touch or change a thing. Peace of mind baked right in.",
+      "The tips GG Coder gives you now actually match the app. No more being told to press some terminal shortcut that does not exist here. It points you at the real buttons you can see and click.",
+    ],
+  },
+  {
     version: "0.10.2",
     date: "2026-07-01",
     items: [
