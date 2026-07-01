@@ -1,5 +1,17 @@
 # @kenkaiiii/ggcoder
 
+## 5.5.0
+
+### Minor Changes
+
+- Add autopilot Ken auto-review loop: after each turn a separate read-only Ken reviewer judges the work and either sends GG Coder back in with a fresh prompt, calls it all-clear, or flags for a human. Also auto-prune completed tasks from the sidecar task list.
+
+### Patch Changes
+
+- @kenkaiiii/gg-ai@5.5.0
+- @kenkaiiii/gg-agent@5.5.0
+- @kenkaiiii/gg-core@5.5.0
+
 ## 5.4.3
 
 ### Patch Changes
