@@ -1,5 +1,17 @@
 # @kenkaiiii/ggcoder
 
+## 5.6.0
+
+### Minor Changes
+
+- Autopilot Ken now has an IGNORE verdict for turns that were never real work (small talk, answered questions, mechanical git ops like commit/push), so trivial turns no longer produce a pointless "all clear" in the transcript.
+
+### Patch Changes
+
+- @kenkaiiii/gg-ai@5.6.0
+- @kenkaiiii/gg-agent@5.6.0
+- @kenkaiiii/gg-core@5.6.0
+
 ## 5.5.1
 
 ### Patch Changes
