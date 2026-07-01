@@ -893,7 +893,7 @@ async function createSession(
   let gitIsRepo: boolean = await isGitRepo(cwd).catch(() => false);
   function currentContextWindow(): number {
     const st = session.getState();
-    return getContextWindow(st.model, { provider: st.provider });
+    return getContextWindow(st.model, { provider: st.provider, accountId: st.accountId });
   }
   // Shared shape merged into /state + the SSE `ready` frame so the footer can
   // render context %, branch, and tasks immediately on connect.
