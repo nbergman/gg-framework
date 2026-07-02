@@ -1,5 +1,17 @@
 # @kenkaiiii/ggcoder
 
+## 5.7.0
+
+### Minor Changes
+
+- Add XP progression system: rank engine, git-based XP, persistent progress store, and sidecar progress endpoints powering the gg-app rank badge, scorecard, and level-up celebrations.
+
+### Patch Changes
+
+- @kenkaiiii/gg-ai@5.7.0
+- @kenkaiiii/gg-agent@5.7.0
+- @kenkaiiii/gg-core@5.7.0
+
 ## 5.6.3
 
 ### Patch Changes
