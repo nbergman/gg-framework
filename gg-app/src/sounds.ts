@@ -8,6 +8,8 @@ import doneUrl from "./assets/ui-done.mp3";
 import fuguUrl from "./assets/fugu.mp3";
 import kenAutopilotOnUrl from "./assets/ken-autopilot-on.mp3";
 import kenAutopilotOffUrl from "./assets/ken-autopilot-off.mp3";
+import levelUpUrl from "./assets/levelup.mp3";
+import expUrl from "./assets/exp.mp3";
 
 export type UiSound =
   | "click"
@@ -16,7 +18,9 @@ export type UiSound =
   | "done"
   | "fugu"
   | "autopilotOn"
-  | "autopilotOff";
+  | "autopilotOff"
+  | "levelUp"
+  | "xp";
 
 const SOURCES: Record<UiSound, string> = {
   click: clickUrl,
@@ -26,6 +30,8 @@ const SOURCES: Record<UiSound, string> = {
   fugu: fuguUrl,
   autopilotOn: kenAutopilotOnUrl,
   autopilotOff: kenAutopilotOffUrl,
+  levelUp: levelUpUrl,
+  xp: expUrl,
 };
 
 // Per-sound master volume — clicks are frequent so they sit quieter than the
@@ -38,6 +44,8 @@ const VOLUME: Record<UiSound, number> = {
   fugu: 0.6,
   autopilotOn: 0.55,
   autopilotOff: 0.55,
+  levelUp: 0.6,
+  xp: 0.42,
 };
 
 // Preloaded base elements (one per sound) cloned on each play.

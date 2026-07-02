@@ -611,6 +611,21 @@ async fn agent_state(
     res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
 }
 
+/// Proxy: current XP/rank progress snapshot (Ranks system).
+#[tauri::command]
+async fn agent_progress(
+    webview: WebviewWindow,
+    client: State<'_, reqwest::Client>,
+) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("daemon not ready")?;
+    let res = client
+        .get(format!("{}/progress", sidecar_base(port)))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
 /// Proxy: submit a prompt (optionally with attachments). The reply streams back
 /// via the `agent-event` event. `attachments` is passed through opaquely.
 #[tauri::command]
@@ -3170,6 +3185,7 @@ pub fn run() {
             read_dropped_file_attachment,
             open_project_path,
             agent_state,
+            agent_progress,
             agent_prompt,
             agent_cancel,
             agent_ken_prompt,

@@ -77,6 +77,10 @@ import { BackButton } from "./BackButton";
 import { AutopilotToggle } from "./AutopilotToggle";
 import { HomeScreen } from "./HomeScreen";
 import { Toaster } from "./Toaster";
+import { Confetti } from "./Confetti";
+import { RankBadge } from "./RankBadge";
+import { ScorecardModal } from "./ScorecardModal";
+import { useProgress } from "./useProgress";
 import { LoginScreen } from "./LoginScreen";
 import { Markdown, PromptSendProvider } from "./Markdown";
 import { FooterSkeleton, TranscriptSkeleton, Skeleton } from "./Skeleton";
@@ -309,6 +313,12 @@ function App(): React.ReactElement {
   // compact transcript markers + a "Ken reviewing…" flag. Separate hook, same
   // shared setItems/nextId pattern as useKenMentor.
   const { autopilotReviewing, handleAutopilotEvent } = useAutopilot({ setItems, nextId });
+  const { snapshot: progress, levelUp, levelUpNonce, levelUpOrigin } = useProgress();
+  const [showScorecard, setShowScorecard] = useState(false);
+  const [rankCelebrateNonce, setRankCelebrateNonce] = useState<string | null>(null);
+  const [xpChips, setXpChips] = useState<Array<{ id: string; label: string }>>([]);
+  const lastProgressXpRef = useRef<number | null>(null);
+  const [confettiNonce, setConfettiNonce] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [placeholderIndex, setPlaceholderIndex] = useState(0);
   const [displayPlaceholder, setDisplayPlaceholder] = useState(DEFAULT_INPUT_PLACEHOLDER);
@@ -535,6 +545,47 @@ function App(): React.ReactElement {
     setEnhancement(null);
     requestAnimationFrame(() => inputRef.current?.focus());
   }, []);
+
+  const showXpChip = useCallback((label: string) => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    playSound("xp");
+    setXpChips((chips) => [...chips.slice(-2), { id, label }]);
+    window.setTimeout(() => {
+      setXpChips((chips) => chips.filter((chip) => chip.id !== id));
+    }, 1700);
+  }, []);
+
+  useEffect(() => {
+    if (!progress) return;
+    const previous = lastProgressXpRef.current;
+    lastProgressXpRef.current = progress.xp;
+    if (previous == null) return;
+    const gained = progress.xp - previous;
+    // Chip + sound only in the window whose run earned the XP — other windows
+    // still receive the frame (badge/percent update) but stay quiet.
+    if (gained > 0 && progress.origin) showXpChip(`+${gained} XP`);
+  }, [progress, showXpChip]);
+
+  useEffect(() => {
+    if (!levelUp || !levelUpNonce) return;
+    toast(`Rank up! → ${levelUp.rankName}`, "success", 5200);
+    // Rank-up visuals show everywhere; the sound only plays in the earning window.
+    if (levelUpOrigin) playSound("levelUp");
+    setRankCelebrateNonce(levelUpNonce);
+    const clearRank = window.setTimeout(() => setRankCelebrateNonce(null), 2400);
+
+    const crossedTier = Math.floor((levelUp.from - 1) / 5) !== Math.floor((levelUp.to - 1) / 5);
+    let clearConfetti = 0;
+    if (crossedTier) {
+      setConfettiNonce(levelUpNonce);
+      clearConfetti = window.setTimeout(() => setConfettiNonce(null), 1900);
+    }
+
+    return () => {
+      window.clearTimeout(clearRank);
+      if (clearConfetti) window.clearTimeout(clearConfetti);
+    };
+  }, [levelUp, levelUpNonce, levelUpOrigin]);
 
   // Re-pin to the bottom before every paint — but only while pinned. The live
   // tool panel + activity bar (.liveregion) grow/shrink below the transcript as
@@ -1736,6 +1787,8 @@ function App(): React.ReactElement {
       onDragLeave={handleWindowDragLeave}
       onDrop={handleWindowDrop}
     >
+      {confettiNonce && <Confetti key={confettiNonce} />}
+
       <div className="chat-head">
         {/* Top strip — the macOS traffic-light row. Holds the window title (where
             the native title used to sit) and the show/hide toggle. Always
@@ -1787,6 +1840,20 @@ function App(): React.ReactElement {
               label="Back to this project's sessions"
               onClick={() => setShowPicker(true)}
             />
+            <div className="rank-badge-wrap">
+              <RankBadge
+                snapshot={progress}
+                celebrateNonce={rankCelebrateNonce}
+                onClick={() => setShowScorecard(true)}
+              />
+              <div className="rank-xp-chip-layer" aria-hidden="true">
+                {xpChips.map((chip) => (
+                  <span className="rank-xp-chip" key={chip.id}>
+                    {chip.label}
+                  </span>
+                ))}
+              </div>
+            </div>
             <span className="picker-head-actions">
               <AutopilotToggle
                 checked={state?.autopilot ?? false}
@@ -2294,6 +2361,10 @@ function App(): React.ReactElement {
           onChange={handleNotesChange}
           onClose={() => setShowNotes(false)}
         />
+      )}
+
+      {showScorecard && progress && (
+        <ScorecardModal snapshot={progress} onClose={() => setShowScorecard(false)} />
       )}
 
       {showTasks && (

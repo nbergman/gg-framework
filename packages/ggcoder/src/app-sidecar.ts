@@ -13,6 +13,7 @@
  */
 import http from "node:http";
 import fs from "node:fs/promises";
+import { watch as fsWatch } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -81,6 +82,12 @@ import {
   type MCPScope,
   type MCPServerConfig,
 } from "./core/mcp/index.js";
+import { buildSnapshot, levelForXp, rankForLevel } from "./core/progress/ranks.js";
+import { loadProgress, peekProgress, updateProgress } from "./core/progress/store.js";
+import { awardPrompt, awardCommits } from "./core/progress/engine.js";
+import { detectNewCommits, repoKey } from "./core/progress/git-xp.js";
+import { rebuildFromSessions } from "./core/progress/rebuild.js";
+import type { ProgressFile, ProgressSnapshot } from "./core/progress/types.js";
 
 const ALL_PROVIDERS: Provider[] = [
   "anthropic",
@@ -665,6 +672,14 @@ async function main(): Promise<void> {
   // `?session=` query for the SSE /events stream).
   const sessions = new Map<string, SessionContext>();
 
+  // XP/rank progress — loaded once per daemon; awards fan out to every window.
+  // Each frame is tagged `origin: true` only for the session that earned the
+  // XP, so that window alone plays sounds/chips while the rest just re-render.
+  const progress = await createProgressManager(paths.agentDir, (snapshot, originId) => {
+    for (const ctx of sessions.values())
+      ctx.broadcast("progress", { ...snapshot, origin: ctx.id === originId });
+  });
+
   /** Resolve the target session id: the `x-gg-session` header, else a
    *  `?session=` query param (used by the SSE /events connection). */
   function sessionIdFromReq(req: http.IncomingMessage, url: string): string | null {
@@ -710,7 +725,10 @@ async function main(): Promise<void> {
           typeof body.sessionPath === "string" && body.sessionPath ? body.sessionPath : undefined;
         const id = randomUUID();
         try {
-          const ctx = await createSession({ auth, paths }, { id, cwd: sessionCwd, sessionPath });
+          const ctx = await createSession(
+            { auth, paths, progress },
+            { id, cwd: sessionCwd, sessionPath },
+          );
           sessions.set(id, ctx);
           log("INFO", "app-sidecar", "session created", { id, cwd: sessionCwd });
           daemonJson(res, 200, { sessionId: id });
@@ -733,6 +751,13 @@ async function main(): Promise<void> {
         log("INFO", "app-sidecar", "session disposed", { id });
       }
       daemonJson(res, 200, { ok: true });
+      return;
+    }
+
+    // Progress is daemon-level so the Home screen can paint before a project
+    // session exists; per-session callers still work through the same endpoint.
+    if (method === "GET" && url === "/progress") {
+      daemonJson(res, 200, progress.snapshot());
       return;
     }
 
@@ -825,6 +850,107 @@ function buildKenContext(
   });
 }
 
+// ── Progress ("Ranks") ──────────────────────────────────────────────────
+// Daemon-level XP/rank manager: one durable file (~/.gg/progress.json), awards
+// applied under a file lock, snapshots broadcast to EVERY session's SSE clients,
+// and an fs.watch on ~/.gg so writes from OTHER daemon processes (dev + packaged
+// app side by side) re-broadcast here too — deduped by the lastEvent nonce.
+// XP failures are debug-log-only; progress must never break a run.
+
+interface ProgressManager {
+  /** Current snapshot for GET /progress + the SSE ready path. */
+  snapshot: () => ProgressSnapshot;
+  /** Award XP for one successfully completed run (prompt + any new commits). */
+  awardRun: (cwd: string, runStartedAt: number, originId?: string) => Promise<void>;
+}
+
+async function createProgressManager(
+  agentDir: string,
+  broadcastAll: (snapshot: ProgressSnapshot, originId?: string) => void,
+): Promise<ProgressManager> {
+  // Boot: recovery chain main → backup → one-time session-history rebuild → empty.
+  let file: ProgressFile = await loadProgress({ rebuild: () => rebuildFromSessions() });
+  // Don't re-celebrate an old levelUp event on boot.
+  let lastSeenNonce: string | null = file.lastEvent?.nonce ?? null;
+  log("INFO", "app-sidecar", "progress loaded", {
+    xp: String(file.xp),
+    level: String(levelForXp(file.xp)),
+  });
+
+  function snapshot(): ProgressSnapshot {
+    return buildSnapshot(file);
+  }
+
+  async function awardRun(cwd: string, runStartedAt: number, originId?: string): Promise<void> {
+    try {
+      const now = Date.now();
+      const updated = await updateProgress(async (f) => {
+        const levelBefore = levelForXp(f.xp);
+        awardPrompt(f, now, cwd);
+
+        // Commit XP: probe repo root + HEAD, then score lastHead..HEAD bounded
+        // by the run window. First sight of a repo records HEAD, scores nothing.
+        const probe = await detectNewCommits(cwd, undefined, runStartedAt);
+        if (probe) {
+          const key = repoKey(probe.repoRoot);
+          const lastHead = f.repos[key]?.lastHead;
+          if (lastHead && lastHead !== probe.head) {
+            const detected = await detectNewCommits(cwd, lastHead, runStartedAt);
+            if (detected && detected.commits.length > 0) {
+              awardCommits(f, detected.commits, now, cwd);
+            }
+          }
+          f.repos[key] = { lastHead: probe.head };
+        }
+
+        // One combined lastEvent per run so other windows celebrate exactly once.
+        const levelAfter = levelForXp(f.xp);
+        const levelUp =
+          levelAfter > levelBefore
+            ? { from: levelBefore, to: levelAfter, rankName: rankForLevel(levelAfter).name }
+            : null;
+        f.lastEvent = { nonce: randomUUID(), levelUp };
+        return { file: f, levelledUp: levelUp !== null };
+      });
+      file = updated;
+      lastSeenNonce = updated.lastEvent?.nonce ?? null;
+      broadcastAll(buildSnapshot(updated), originId);
+    } catch (err) {
+      log("DEBUG", "app-sidecar", "progress award failed", {
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Watch ~/.gg (dir watch survives the atomic tmp+rename) for progress.json
+  // writes from other daemon processes; debounce, reload read-only, dedupe by nonce.
+  let watchDebounce: NodeJS.Timeout | null = null;
+  try {
+    const watcher = fsWatch(agentDir, (_event, filename) => {
+      if (filename !== "progress.json") return;
+      if (watchDebounce) clearTimeout(watchDebounce);
+      watchDebounce = setTimeout(() => {
+        void (async () => {
+          const reloaded = await peekProgress();
+          if (!reloaded) return;
+          const nonce = reloaded.lastEvent?.nonce ?? null;
+          if (nonce === lastSeenNonce) return;
+          file = reloaded;
+          lastSeenNonce = nonce;
+          broadcastAll(buildSnapshot(reloaded));
+        })();
+      }, 150);
+    });
+    watcher.unref();
+  } catch (err) {
+    log("DEBUG", "app-sidecar", "progress watch unavailable", {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  return { snapshot, awardRun };
+}
+
 interface SessionContext {
   id: string;
   cwd: string;
@@ -850,10 +976,14 @@ interface SessionContext {
  * logger, PATH, shared auth file, and radio live at the daemon level.
  */
 async function createSession(
-  deps: { auth: AuthStorage; paths: Awaited<ReturnType<typeof ensureAppDirs>> },
+  deps: {
+    auth: AuthStorage;
+    paths: Awaited<ReturnType<typeof ensureAppDirs>>;
+    progress: ProgressManager;
+  },
   opts: { id: string; cwd: string; sessionPath?: string },
 ): Promise<SessionContext> {
-  const { auth } = deps;
+  const { auth, progress } = deps;
   const paths = deps.paths;
   const cwd = opts.cwd;
   // Base host for parsing request-URL query params (value is irrelevant to
@@ -1039,6 +1169,9 @@ async function createSession(
 
   let running = false;
   let titleGenerated = false;
+  // Bumped by /cancel — a run whose cancel generation changed mid-flight was
+  // canceled and earns no XP.
+  let cancelGeneration = 0;
   // Autopilot (auto-review) toggle for THIS window's project. Loaded from
   // gg-app.json on boot; flipped via POST /autopilot. When on, POST /prompt runs
   // runAutopilotCycle after the user's turn settles — Ken auto-reviews the work
@@ -1252,13 +1385,28 @@ async function createSession(
   // run_start frame.
   async function runAgent(label: string, run: () => Promise<void>): Promise<void> {
     running = true;
+    // Progress (Ranks): completed, non-canceled runs with ≥1 assistant turn earn
+    // XP — prompt + any commits authored during the run window.
+    const runStartedAt = Date.now();
+    const cancelGenAtStart = cancelGeneration;
+    const assistantsBeforeRun = countAssistantMessages(session.getMessages());
+    let runSucceeded = false;
     broadcast("run_start", { text: label });
     try {
       await run();
+      runSucceeded = true;
     } catch (err) {
       broadcastError("error", "run failed", err);
     } finally {
       running = false;
+      if (
+        runSucceeded &&
+        cancelGeneration === cancelGenAtStart &&
+        countAssistantMessages(session.getMessages()) > assistantsBeforeRun
+      ) {
+        // Fire-and-forget — XP must never delay or break run teardown.
+        void progress.awardRun(cwd, runStartedAt, opts.id);
+      }
       // A run may have switched branches (git checkout) or spawned/finished
       // background tasks — refresh the footer extras once it settles.
       gitBranch = await getGitBranch(cwd).catch(() => gitBranch);
@@ -1572,6 +1720,11 @@ async function createSession(
         ...kenStatePayload(),
         ...footerExtras(),
       });
+      return;
+    }
+
+    if (method === "GET" && url === "/progress") {
+      json(res, 200, progress.snapshot());
       return;
     }
 
@@ -2422,6 +2575,7 @@ async function createSession(
     }
 
     if (method === "POST" && url === "/cancel") {
+      cancelGeneration++;
       abort.abort();
       abort = new AbortController();
       session.setSignal(abort.signal);
