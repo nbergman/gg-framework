@@ -1,5 +1,14 @@
 # @kenkaiiii/ggcoder
 
+## 5.6.3
+
+### Patch Changes
+
+- Fix duplicate session files created on every resume — resuming now appends to the original session file instead of forking a byte-identical copy each time.
+  - @kenkaiiii/gg-ai@5.6.3
+  - @kenkaiiii/gg-agent@5.6.3
+  - @kenkaiiii/gg-core@5.6.3
+
 ## 5.6.2
 
 ### Patch Changes
