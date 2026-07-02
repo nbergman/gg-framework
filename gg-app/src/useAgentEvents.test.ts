@@ -14,7 +14,7 @@ vi.mock("./agent", () => ({ listCommands: vi.fn().mockResolvedValue([]) }));
 
 import { useAgentEvents, type AgentEventsDeps } from "./useAgentEvents";
 import type { Item } from "./App";
-import type { SidecarEvent } from "./agent";
+import type { AgentState, SidecarEvent } from "./agent";
 import type { LiveToolEntry } from "./LiveToolPanel";
 
 const ev = (type: string, data: Record<string, unknown> = {}): SidecarEvent =>
@@ -38,13 +38,25 @@ function setup(handleKenEvent: (e: SidecarEvent) => boolean = () => false) {
   const setRunning = vi.fn() as unknown as AgentEventsDeps["setRunning"];
   const setTokens = vi.fn() as unknown as AgentEventsDeps["setTokens"];
 
+  // Real reducer-style state holder so functional setState updates (used by
+  // model_change / ken_model_change spreads) apply against a base state.
+  let agentState: AgentState | null = {
+    provider: "anthropic",
+    model: "claude-opus-5",
+    cwd: "/tmp/proj",
+    running: false,
+  } as AgentState;
+  const setState = ((u: AgentState | null | ((p: AgentState | null) => AgentState | null)) => {
+    agentState = typeof u === "function" ? u(agentState) : u;
+  }) as AgentEventsDeps["setState"];
+
   const noop = (): void => {};
   const deps: AgentEventsDeps = {
     setItems: setItems as AgentEventsDeps["setItems"],
     nextId,
     handleKenEvent,
     handleAutopilotEvent: () => false,
-    setState: noop as unknown as AgentEventsDeps["setState"],
+    setState,
     setTasks: noop as unknown as AgentEventsDeps["setTasks"],
     setProjectTasks: noop as unknown as AgentEventsDeps["setProjectTasks"],
     setStatus: noop as unknown as AgentEventsDeps["setStatus"],
@@ -76,6 +88,7 @@ function setup(handleKenEvent: (e: SidecarEvent) => boolean = () => false) {
     hook,
     getItems: () => items,
     getLiveToolFeed: () => liveToolFeed,
+    getState: () => agentState,
     setRunning,
     setTokens,
   };
@@ -178,6 +191,42 @@ describe("useAgentEvents", () => {
     // Nothing handled locally: no assistant item, run state untouched.
     expect(getItems()).toHaveLength(0);
     expect(setRunning).not.toHaveBeenCalled();
+  });
+
+  it("ken_model_change updates Ken's footer model state (falls through ken_ delegation)", () => {
+    // useKenMentor's handleKenEvent returns false for ken_model_change (it only
+    // owns the chat-bubble events), so the event must reach the main switch —
+    // the default setup handleKenEvent mirrors that by returning false.
+    const { hook, getState } = setup();
+    act(() => {
+      hook.result.current.handleEvent(
+        ev("ken_model_change", {
+          kenProvider: "openai",
+          kenModel: "gpt-5.5",
+          kenModelOverride: true,
+        }),
+      );
+    });
+    expect(getState()).toMatchObject({
+      kenProvider: "openai",
+      kenModel: "gpt-5.5",
+      kenModelOverride: true,
+      // GG Coder's own model is untouched by a Ken pin.
+      model: "claude-opus-5",
+      provider: "anthropic",
+    });
+
+    // Clearing the pin: sidecar broadcasts Ken back on GG Coder's model.
+    act(() => {
+      hook.result.current.handleEvent(
+        ev("ken_model_change", {
+          kenProvider: "anthropic",
+          kenModel: "claude-opus-5",
+          kenModelOverride: false,
+        }),
+      );
+    });
+    expect(getState()).toMatchObject({ kenModel: "claude-opus-5", kenModelOverride: false });
   });
 
   it("run_end clears running state", () => {

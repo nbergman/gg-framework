@@ -3736,6 +3736,13 @@ body {
   gap: 2px 8px;
 }
 
+/* "Follow GG Coder" row in Ken's model picker — full-width above the grid. */
+.model-menu-follow {
+  display: block;
+  width: 100%;
+  margin-bottom: 6px;
+}
+
 .model-menu-item {
   border: none;
   border-radius: var(--radius-button);

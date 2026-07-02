@@ -11,6 +11,7 @@
  * (which runs `main()` at import time).
  */
 import type { Message, ContentPart, ToolResult } from "@kenkaiiii/gg-ai";
+import { matchExpandedCommand, type WorkflowCommandSpec } from "./autopilot-gate.js";
 
 /** How many of the most recent build-session messages to inline verbatim. */
 export const KEN_RECENT_MESSAGE_LIMIT = 20;
@@ -20,6 +21,17 @@ const COMPACTION_SUMMARY_MARKER = "[Previous conversation summary]";
 
 /** Max chars of any single message's rendered text in the digest. */
 const MESSAGE_CHAR_CAP = 1500;
+
+/** Softer cap for the pinned original-request section: the ask under review
+ *  must never be judged against a mid-sentence truncation, so it gets far more
+ *  room than a recent-activity line. */
+const ORIGINAL_REQUEST_CAP = 4000;
+
+/** Label for a user-role message that was actually injected by Autopilot Ken.
+ *  Without it, multi-round cycles render Ken's own fix prompts as `**User:**`
+ *  and he starts reviewing against his own last prompt instead of the user's
+ *  original ask. Referenced by the autopilot system prompt — keep in sync. */
+export const INJECTED_PROMPT_LABEL = "**Ken autopilot (injected):**";
 
 export interface KenDigestInput {
   /** The user's `@Ken …` text (already stripped of the mention). */
@@ -34,6 +46,17 @@ export interface KenDigestInput {
   platform?: string;
   /** Override the recent-message cap (tests). */
   recentLimit?: number;
+  /** The user prompt that started the turn under review (autopilot). Pinned in
+   *  its own section so it can never scroll out of the rolling recent-activity
+   *  window during multi-round cycles. */
+  originalRequest?: string;
+  /** Prompt bodies Autopilot Ken injected into the build session. Matching
+   *  user messages render under {@link INJECTED_PROMPT_LABEL}, not `**User:**`. */
+  injectedPrompts?: readonly string[];
+  /** Known workflow commands (built-in + custom). Expanded template bodies in
+   *  the transcript render as a short `[ran workflow command /name]` note
+   *  instead of hundreds of template lines masquerading as a user ask. */
+  workflowCommands?: readonly WorkflowCommandSpec[];
 }
 
 /** Truncate long text and note how much was dropped. */
@@ -56,10 +79,32 @@ function summarizeToolCall(name: string, args: Record<string, unknown>): string 
   return arg ? `${name}(${arg})` : `${name}()`;
 }
 
+/** Per-digest options threaded into message rendering. */
+interface RenderMessageOptions {
+  injectedPrompts: readonly string[];
+  workflowCommands: readonly WorkflowCommandSpec[];
+}
+
+/** Render one user-role message body with provenance-aware labeling:
+ *  autopilot-injected prompts and workflow-command expansions are labeled as
+ *  what they ARE, so Ken never mistakes either for a user-authored ask. */
+function renderUserText(text: string, opts: RenderMessageOptions): string | null {
+  if (!text) return null;
+  if (opts.injectedPrompts.some((p) => p.trim() === text.trim())) {
+    return `${INJECTED_PROMPT_LABEL} ${cap(text)}`;
+  }
+  const expanded = matchExpandedCommand(text, opts.workflowCommands);
+  if (expanded) {
+    const head = `**User:** [ran workflow command /${expanded.command.name}]`;
+    return expanded.args ? `${head} with instructions: ${cap(expanded.args, 400)}` : head;
+  }
+  return `**User:** ${cap(text)}`;
+}
+
 /** Render one message's role-tagged text, stripping image/blob payloads and
  *  summarizing tool calls/results to short lines. Returns null for empty/noise
  *  messages (e.g. a tool result that was only an image). */
-function renderMessage(msg: Message): string | null {
+function renderMessage(msg: Message, opts: RenderMessageOptions): string | null {
   if (msg.role === "user") {
     const text =
       typeof msg.content === "string"
@@ -68,7 +113,7 @@ function renderMessage(msg: Message): string | null {
             .map((p) => (p.type === "text" ? p.text : `[${p.type}]`))
             .join(" ")
             .trim();
-    return text ? `**User:** ${cap(text)}` : null;
+    return renderUserText(text, opts);
   }
 
   if (msg.role === "assistant") {
@@ -118,9 +163,12 @@ function renderMessage(msg: Message): string | null {
  */
 export const AUTOPILOT_REVIEW_INSTRUCTION =
   "GG Coder just finished a turn. Review its work against the user's original " +
-  "request in the transcript above. Reply with your verdict ONLY — the first " +
-  "line must be exactly PROMPT, ALL_CLEAR, IGNORE, or HUMAN, with the payload " +
-  "after. No greetings, no mentorship prose.";
+  "ask (the 'Original user request' section above; lines labeled 'Ken " +
+  "autopilot (injected)' are your own earlier fix prompts, NOT user asks). " +
+  "Reply with your verdict ONLY — the first line must be exactly PROMPT, " +
+  "ALL_CLEAR, IGNORE, or HUMAN, with the payload after. If GG Coder ended by " +
+  "asking the user a question or presenting options, the verdict is HUMAN. " +
+  "No greetings, no mentorship prose.";
 
 /** Inputs the sidecar gathers for an autopilot review digest (everything
  *  `buildKenDigest` needs except the fixed review instruction, which this helper
@@ -163,9 +211,15 @@ export function buildKenDigest(input: KenDigestInput): string {
 
   // Recent conversation = messages after the summary (or the tail), skipping
   // the system message and the summary message itself.
+  const renderOpts: RenderMessageOptions = {
+    injectedPrompts: input.injectedPrompts ?? [],
+    workflowCommands: input.workflowCommands ?? [],
+  };
   const afterSummary = input.messages.slice(summaryIndex + 1).filter((m) => m.role !== "system");
   const recent = afterSummary.slice(-recentLimit);
-  const renderedRecent = recent.map(renderMessage).filter((l): l is string => l !== null);
+  const renderedRecent = recent
+    .map((m) => renderMessage(m, renderOpts))
+    .filter((l): l is string => l !== null);
 
   const sections: string[] = [];
 
@@ -184,6 +238,18 @@ export function buildKenDigest(input: KenDigestInput): string {
 
   if (summaryText) {
     sections.push(`## Story so far\n${cap(summaryText, 4000)}`);
+  }
+
+  // Pinned so multi-round autopilot cycles can never lose the ask under review
+  // to the rolling recent-activity window (the drift that made Ken judge his
+  // own injected prompt as "the user's request").
+  if (input.originalRequest?.trim()) {
+    sections.push(
+      `## Original user request (the turn under review)\n${cap(
+        input.originalRequest.trim(),
+        ORIGINAL_REQUEST_CAP,
+      )}`,
+    );
   }
 
   sections.push(

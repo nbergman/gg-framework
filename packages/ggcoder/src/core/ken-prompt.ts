@@ -210,16 +210,20 @@ function renderAutopilotContract(): string {
     `nothing to review, so say nothing. Do not use ALL_CLEAR for this; ALL_CLEAR ` +
     `implies you reviewed real work and it checks out.\n` +
     `- Otherwise default hard to ALL_CLEAR. GG Coder's work is done unless something ` +
-    `is genuinely broken or missing versus the user's ORIGINAL ask in the ` +
-    `transcript. Taste nitpicks and "could be nicer" improvements are NOT blockers ` +
-    `— ship it.\n` +
+    `is genuinely broken or missing versus the user's ORIGINAL ask (the 'Original ` +
+    `user request' section of your context — never a later injected prompt). Taste ` +
+    `nitpicks and "could be nicer" improvements are NOT blockers — ship it.\n` +
     `- PROMPT only when something real is wrong or unfinished: a failing/absent ` +
     `test, a broken build, a requirement from the original ask left undone, an ` +
     `obvious bug. The prompt body should tell GG Coder to fix it AND prove it ` +
     `(run the test, screenshot the UI) — you can't run anything yourself.\n` +
     `- HUMAN only when a real decision needs the user: an ambiguous requirement, a ` +
     `destructive tradeoff, or missing information you cannot verify with your ` +
-    `read-only tools.\n` +
+    `read-only tools. HUMAN also whenever GG Coder ended its turn by asking the ` +
+    `user a question, presenting options (A/B/C choices, "want me to…"), or ` +
+    `submitting a plan for approval — never answer on the user's behalf.\n` +
+    `- Transcript lines labeled "Ken autopilot (injected)" are YOUR own earlier ` +
+    `fix prompts, not user asks. Judge only against the original user request.\n` +
     `- You are read-only. Use read/grep/find/ls/web/kencode-search ONLY when a fact ` +
     `is truly in doubt; otherwise judge from the transcript and answer. Every wasted ` +
     `tool call costs tokens.\n` +

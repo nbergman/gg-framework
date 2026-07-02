@@ -931,6 +931,27 @@ async fn agent_switch_model(
     res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
 }
 
+/// Proxy: pin Ken (mentor + autopilot) to a model, or clear the pin so he
+/// follows GG Coder's model again. `model: None` clears. Returns
+/// `{ kenProvider, kenModel, kenModelOverride }`.
+#[tauri::command]
+async fn agent_switch_ken_model(
+    webview: WebviewWindow,
+    client: State<'_, reqwest::Client>,
+    model: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let port = port_for(&webview).ok_or("daemon not ready")?;
+    let gg_sid = session_for(&webview).ok_or("session not ready")?;
+    let res = client
+        .post(format!("{}/ken/model", sidecar_base(port)))
+        .header("x-gg-session", &gg_sid)
+        .json(&serde_json::json!({ "model": model }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    res.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+}
+
 /// Proxy: rewrite a draft prompt into a tighter, terminology-correct version
 /// using the active model. Returns `{ enhanced, segments }`.
 #[tauri::command]
@@ -3020,6 +3041,7 @@ pub fn run() {
             agent_cycle_thinking,
             agent_models,
             agent_switch_model,
+            agent_switch_ken_model,
             agent_enhance_prompt,
             agent_commands,
             setup_windows,

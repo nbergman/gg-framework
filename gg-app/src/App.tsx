@@ -12,6 +12,7 @@ import {
   cycleThinking,
   listModels,
   switchModel,
+  switchKenModel,
   listCommands,
   listHistory,
   listTasks,
@@ -340,6 +341,7 @@ function App(): React.ReactElement {
   const [thinkingAccumMs, setThinkingAccumMs] = useState(0);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [kenModelMenuOpen, setKenModelMenuOpen] = useState(false);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [slashIndex, setSlashIndex] = useState(0);
   // `@`-mention file picker state. `mention` is the active token being typed
@@ -951,6 +953,29 @@ function App(): React.ReactElement {
     },
     [notesKey],
   );
+
+  // Pin Ken to a model (or null → clear the pin, follow GG Coder). The
+  // sidecar's ken_model_change broadcast updates state; the .then is just a
+  // faster local echo of the same payload.
+  function onSelectKenModel(modelId: string | null): void {
+    setKenModelMenuOpen(false);
+    if (state && modelId !== null && state.kenModelOverride && modelId === state.kenModel) return;
+    if (state && modelId === null && !state.kenModelOverride) return;
+    void switchKenModel(modelId).then((res) => {
+      if (res) {
+        setState((s) =>
+          s
+            ? {
+                ...s,
+                kenProvider: res.kenProvider,
+                kenModel: res.kenModel,
+                kenModelOverride: res.kenModelOverride,
+              }
+            : s,
+        );
+      }
+    });
+  }
 
   function onSelectModel(modelId: string): void {
     setModelMenuOpen(false);
@@ -2044,16 +2069,50 @@ function App(): React.ReactElement {
                     currentModel={state?.model ?? ""}
                     onSelect={onSelectModel}
                     onClose={() => setModelMenuOpen(false)}
+                    title="GG Coder model"
                   />
                 )}
                 <button
                   className="model-button"
                   style={{ color: theme.text }}
                   disabled={running || models.length === 0}
-                  title="Switch model"
-                  onClick={() => setModelMenuOpen((o) => !o)}
+                  title="Switch GG Coder's model"
+                  onClick={() => {
+                    setKenModelMenuOpen(false);
+                    setModelMenuOpen((o) => !o);
+                  }}
                 >
-                  {state?.model ?? "\u2026"}
+                  {`GG ${state?.model ?? "\u2026"}`}
+                </button>
+              </span>
+              <FooterSep />
+              <span className="model-anchor">
+                {kenModelMenuOpen && models.length > 0 && (
+                  <ModelMenu
+                    models={models}
+                    currentModel={state?.kenModel ?? state?.model ?? ""}
+                    onSelect={(id) => onSelectKenModel(id)}
+                    onClose={() => setKenModelMenuOpen(false)}
+                    title="Ken's model"
+                    onSelectFollow={() => onSelectKenModel(null)}
+                    followActive={!state?.kenModelOverride}
+                  />
+                )}
+                <button
+                  className="model-button"
+                  style={{ color: theme.ken }}
+                  disabled={models.length === 0}
+                  title={
+                    state?.kenModelOverride
+                      ? "Ken is pinned to his own model — click to change"
+                      : "Ken follows GG Coder's model — click to pin one"
+                  }
+                  onClick={() => {
+                    setModelMenuOpen(false);
+                    setKenModelMenuOpen((o) => !o);
+                  }}
+                >
+                  {`Ken ${state?.kenModel ?? state?.model ?? "\u2026"}`}
                 </button>
               </span>
             </span>

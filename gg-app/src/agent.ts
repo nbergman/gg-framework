@@ -63,6 +63,13 @@ export interface AgentState {
   /** Autopilot (auto-review) toggle for this window's project. Per-window,
    *  persisted server-side; absent on frames from older sidecars. */
   autopilot?: boolean;
+  /** Provider of the model Ken (mentor + autopilot) uses next turn. */
+  kenProvider?: string;
+  /** The model Ken uses next turn — his pin when set, else GG Coder's model.
+   *  Absent on frames from older sidecars (footer falls back to `model`). */
+  kenModel?: string;
+  /** True when Ken is pinned to his own model (not following GG Coder). */
+  kenModelOverride?: boolean;
   /** Live background tasks (footer indicator). */
   tasks?: BackgroundTask[];
 }
@@ -145,6 +152,13 @@ export interface RecentSession {
 export interface SwitchModelResult extends ThinkingState {
   provider: string;
   model: string;
+}
+
+/** Result of pinning/clearing Ken's model — his effective model afterward. */
+export interface SwitchKenModelResult {
+  kenProvider: string;
+  kenModel: string;
+  kenModelOverride: boolean;
 }
 
 export async function getState(): Promise<AgentState> {
@@ -516,6 +530,17 @@ export async function switchModel(model: string): Promise<SwitchModelResult | nu
     return await invoke<SwitchModelResult>("agent_switch_model", { model });
   } catch (e) {
     await logError(`agent_switch_model failed: ${String(e)}`);
+    return null;
+  }
+}
+
+/** Pin Ken (mentor + autopilot) to a model, or pass null to clear the pin so
+ *  he follows GG Coder's model again. Returns his effective model. */
+export async function switchKenModel(model: string | null): Promise<SwitchKenModelResult | null> {
+  try {
+    return await invoke<SwitchKenModelResult>("agent_switch_ken_model", { model });
+  } catch (e) {
+    await logError(`agent_switch_ken_model failed: ${String(e)}`);
     return null;
   }
 }

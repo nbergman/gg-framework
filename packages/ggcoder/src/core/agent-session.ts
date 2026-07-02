@@ -1185,6 +1185,14 @@ export class AgentSession {
     return this.userQueue.length;
   }
 
+  /** Remove and return the oldest queued message (text + attachments), or null.
+   *  Used by the sidecar to run a message that queued while autopilot was
+   *  reviewing (no run in flight to steer it into) — unlike {@link drainQueue},
+   *  attachments survive so queued media isn't silently dropped. */
+  takeNextQueuedMessage(): { text: string; attachments: SessionAttachment[] } | null {
+    return this.userQueue.shift() ?? null;
+  }
+
   /** Clear the queue, returning the combined text (to restore to the composer).
    *  Queued attachments are dropped on cancel — the composer only restores text. */
   drainQueue(): string {

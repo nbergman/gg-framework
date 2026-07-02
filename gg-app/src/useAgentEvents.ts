@@ -662,6 +662,12 @@ export function useAgentEvents(deps: AgentEventsDeps): AgentEvents {
         case "model_change":
           setState((s) => (s ? { ...s, ...(d as Partial<AgentState>) } : s));
           break;
+        // Ken's effective model changed — either his pin was set/cleared or he
+        // followed a GG Coder switch. Payload keys (kenProvider/kenModel/
+        // kenModelOverride) match AgentState, so a spread is enough.
+        case "ken_model_change":
+          setState((s) => (s ? { ...s, ...(d as Partial<AgentState>) } : s));
+          break;
         case "thinking_change":
           setState((s) =>
             s
