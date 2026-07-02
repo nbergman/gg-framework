@@ -22,6 +22,16 @@ export interface ChangelogEntry {
 /** Newest first. Prepended by the `/release` flow. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.12.3",
+    date: "2026-07-02",
+    items: [
+      "I got a lot faster and cheaper to talk to. Your context now stays warm in my memory for a full hour instead of dropping every five minutes, so long sessions cost less and I answer quicker.",
+      "Drag a folder straight onto the window and I will drop its path right into your message, no more typing paths by hand.",
+      "Autopilot now skips reviewing pure busywork, like commits, pushes, and status checks, so I only chime in when there is real work worth judging.",
+      "Added a Grant Permissions button in Settings for macOS so you can hand me full disk access in one click instead of clicking through a maze of prompts.",
+    ],
+  },
+  {
     version: "0.12.2",
     date: "2026-07-02",
     items: [
