@@ -85,7 +85,7 @@ export const AUTOPILOT_MARKER_CUSTOM_KIND = "autopilot_marker";
 
 export interface AutopilotMarkerPayload {
   version: 1;
-  phase: "prompted" | "done" | "human" | "capped";
+  phase: "prompted" | "done" | "human" | "capped" | "plan_approved";
   reason?: string;
   body?: string;
   afterMessageCount: number;
@@ -523,7 +523,11 @@ export class SessionManager {
       const phase = p?.phase;
       if (
         p?.version === 1 &&
-        (phase === "prompted" || phase === "done" || phase === "human" || phase === "capped")
+        (phase === "prompted" ||
+          phase === "done" ||
+          phase === "human" ||
+          phase === "capped" ||
+          phase === "plan_approved")
       ) {
         return [
           {

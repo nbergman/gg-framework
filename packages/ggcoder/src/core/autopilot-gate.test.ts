@@ -125,8 +125,44 @@ describe("shouldStartAutopilotCycle", () => {
     assistantMessagesAdded: 1,
   };
 
-  it("starts for a normal reviewable turn", () => {
-    expect(shouldStartAutopilotCycle(reviewable)).toEqual({ start: true });
+  it("starts a work review for a normal reviewable turn", () => {
+    expect(shouldStartAutopilotCycle(reviewable)).toEqual({ start: true, kind: "work" });
+  });
+
+  it("starts a plan review when the turn submitted a plan (exit_plan)", () => {
+    expect(shouldStartAutopilotCycle({ ...reviewable, planPending: true })).toEqual({
+      start: true,
+      kind: "plan",
+    });
+  });
+
+  it("plan review beats workflow-command / mechanical-only / no-assistant-output", () => {
+    // A plan-submission turn often looks skippable (mostly reads + exit_plan,
+    // maybe zero assistant text added by the gate's count) — planPending must
+    // override all the cheap-skip checks so the plan actually gets reviewed.
+    expect(
+      shouldStartAutopilotCycle({
+        ...reviewable,
+        planPending: true,
+        workflowCommand: true,
+        mechanicalOnly: true,
+        assistantMessagesAdded: 0,
+      }),
+    ).toEqual({ start: true, kind: "plan" });
+  });
+
+  it("disabled / cancelled / plan-mode still beat a pending plan", () => {
+    expect(shouldStartAutopilotCycle({ ...reviewable, planPending: true, enabled: false })).toEqual(
+      { start: false, reason: "disabled" },
+    );
+    expect(
+      shouldStartAutopilotCycle({ ...reviewable, planPending: true, cancelled: true }),
+    ).toEqual({ start: false, reason: "cancelled" });
+    // Still INSIDE plan mode (entered, never exited) → no submitted plan to
+    // review; Ken must not touch a read-only session.
+    expect(shouldStartAutopilotCycle({ ...reviewable, planPending: true, planMode: true })).toEqual(
+      { start: false, reason: "plan-mode" },
+    );
   });
 
   it("skips when autopilot is off", () => {

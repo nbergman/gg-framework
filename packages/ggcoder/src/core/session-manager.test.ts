@@ -197,6 +197,16 @@ describe("SessionManager.getAutopilotMarkers", () => {
     expect(markers[0]).toMatchObject({ phase: "capped", afterMessageCount: 3 });
   });
 
+  it("accepts the plan_approved phase (autopilot plan auto-accept)", () => {
+    // Regression: the validator once whitelisted only the four original
+    // phases, silently dropping persisted plan_approved markers on resume.
+    const markers = manager.getAutopilotMarkers([
+      autopilotEntry("a1", { version: 1, phase: "plan_approved", afterMessageCount: 0 }),
+    ]);
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).toMatchObject({ phase: "plan_approved", afterMessageCount: 0 });
+  });
+
   it("defaults a missing afterMessageCount to 0", () => {
     const markers = manager.getAutopilotMarkers([
       autopilotEntry("a1", { version: 1, phase: "done" }),

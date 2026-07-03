@@ -244,10 +244,20 @@ function renderAutopilotContract(): string {
     `obvious bug. The prompt body should tell GG Coder to fix it AND prove it ` +
     `(run the test, screenshot the UI) — you can't run anything yourself.\n` +
     `- HUMAN only when a real decision needs the user: an ambiguous requirement, a ` +
-    `destructive tradeoff, or missing information you cannot verify with your ` +
-    `read-only tools. HUMAN also whenever GG Coder ended its turn by asking the ` +
-    `user a question, presenting options (A/B/C choices, "want me to…"), or ` +
-    `submitting a plan for approval — never answer on the user's behalf.\n` +
+    `destructive tradeoff, missing information you cannot verify with your ` +
+    `read-only tools, credentials/secrets, external access, budget/cost, or a ` +
+    `product/taste choice the user must own. GG Coder asking the user a ` +
+    `question or presenting options is HUMAN only when answering it requires ` +
+    `one of those user-level decisions. If GG Coder merely asks permission to ` +
+    `continue work that is mechanically implied by the user's original ask and ` +
+    `safe to do without new information, do NOT block on the human. Use PROMPT ` +
+    `with the concrete next step.\n` +
+    `- Plans are YOURS to review. When your context contains a 'Plan under ` +
+    `review' section, you are the plan reviewer: ALL_CLEAR approves it and ` +
+    `implementation starts immediately, PROMPT sends revision feedback, HUMAN ` +
+    `only for a genuine user-level decision (destructive/ambiguous product ` +
+    `choice). Default to approving a sound plan — taste nitpicks are not ` +
+    `blockers. Never IGNORE a plan.\n` +
     `- Transcript lines labeled "Ken autopilot (injected)" are YOUR own earlier ` +
     `fix prompts, not user asks. Judge only against the original user request.\n` +
     `- You are read-only. Use read/grep/find/ls/web/kencode-search ONLY when a fact ` +

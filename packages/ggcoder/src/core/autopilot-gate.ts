@@ -144,6 +144,10 @@ export interface AutopilotGateInput {
   cancelled: boolean;
   /** True when the session ended the turn in plan mode (plan modal pending). */
   planMode: boolean;
+  /** True when the turn SUBMITTED a plan (exit_plan fired — the sidecar's
+   *  pendingPlanPath is set). Ken reviews the plan itself instead of the
+   *  work. Optional so existing callers/tests default to false. */
+  planPending?: boolean;
   /** True when the turn was a workflow slash command (see isWorkflowCommandText). */
   workflowCommand: boolean;
   /** Assistant messages ADDED by this turn (after minus before). */
@@ -154,21 +158,31 @@ export interface AutopilotGateInput {
   mechanicalOnly?: boolean;
 }
 
-export type AutopilotGateDecision = { start: true } | { start: false; reason: AutopilotSkipReason };
+export type AutopilotGateDecision =
+  | { start: true; kind: "work" | "plan" }
+  | { start: false; reason: AutopilotSkipReason };
 
 /**
  * Decide whether the autopilot cycle may start for a just-finished turn.
  * Checks are ordered cheapest/most-fundamental first; the reason is logged by
  * the sidecar so skips are debuggable from gg-app-sidecar.log.
+ *
+ * `planPending` beats the workflow/mechanical/no-output checks: a plan
+ * submission via exit_plan flips plan mode OFF and often has only mechanical
+ * tool calls, but it IS reviewable work — Ken reviews the plan itself
+ * (kind: "plan") instead of skipping. `planMode` still wins over it: a turn
+ * that ended INSIDE plan mode (enter without exit) has no submitted plan and
+ * Ken must never prompt into a read-only session.
  */
 export function shouldStartAutopilotCycle(input: AutopilotGateInput): AutopilotGateDecision {
   if (!input.enabled) return { start: false, reason: "disabled" };
   if (input.cancelled) return { start: false, reason: "cancelled" };
   if (input.planMode) return { start: false, reason: "plan-mode" };
+  if (input.planPending) return { start: true, kind: "plan" };
   if (input.workflowCommand) return { start: false, reason: "workflow-command" };
   if (input.mechanicalOnly) return { start: false, reason: "mechanical-only" };
   if (input.assistantMessagesAdded <= 0) return { start: false, reason: "no-assistant-output" };
-  return { start: true };
+  return { start: true, kind: "work" };
 }
 
 /** A tool call made during a turn, as recorded on an assistant message's

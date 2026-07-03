@@ -345,6 +345,10 @@ export async function cancel(): Promise<void> {
 //   autopilot_ignored {}            — nothing worth reviewing, loop stops SILENTLY (no marker)
 //   autopilot_human { reason }      — Ken needs a human decision, loop stops
 //   autopilot_capped { rounds }     — round cap hit, loop paused
+//   autopilot_plan_accepted {}      — Ken approved a submitted plan; broadcast
+//                                     BEFORE the session_reset that follows so
+//                                     the webview can seed the plan-progress
+//                                     widget from the still-open plan modal
 //   autopilot_error { headline, … } — a review failed (structured, like error)
 
 /** Ask Ken Kai. Fires the read-only mentor run; reply arrives via `ken_*`
@@ -420,7 +424,7 @@ export interface HistoryEntry {
    *  identically to the live `autopilot` item (Ken-tinted bubble), never as
    *  the raw verdict keyword the model replied with (e.g. `ALL_CLEAR`). */
   autopilot?: {
-    phase: "prompted" | "done" | "human" | "capped";
+    phase: "prompted" | "done" | "human" | "capped" | "plan_approved";
     reason?: string;
     body?: string;
   };

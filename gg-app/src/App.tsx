@@ -221,7 +221,7 @@ export type Item =
   | {
       kind: "autopilot";
       id: number;
-      phase: "prompted" | "done" | "human" | "capped";
+      phase: "prompted" | "done" | "human" | "capped" | "plan_approved";
       reason?: string;
       body?: string;
     };
@@ -2349,6 +2349,9 @@ function App(): React.ReactElement {
       {planReview !== null && (
         <PlanReviewModal
           content={planReview}
+          // Autopilot Ken reviews submitted plans himself; the indicator tells
+          // the user, but manual Accept/Reject stays live and always wins.
+          kenReviewing={autopilotReviewing}
           onAccept={acceptPlan}
           onFeedback={sendPlanFeedback}
           onReject={rejectPlan}
@@ -2508,6 +2511,7 @@ const TranscriptRow = memo(function TranscriptRow({
         done: ALL_CLEAR_VARIATIONS[item.id % ALL_CLEAR_VARIATIONS.length],
         human: item.reason?.trim() ? item.reason.trim() : "Need you to weigh in on this one.",
         capped: "Paused autopilot after 3 rounds. Take a look before I keep going.",
+        plan_approved: "Plan looks solid. Approved it — implementation is underway.",
       };
       return (
         <div className="assistant-msg ken-msg">

@@ -21,13 +21,31 @@ describe("buildKenAutopilotSystemPrompt — verdict contract", () => {
     }
   });
 
-  it("routes end-of-turn questions/options/plans to HUMAN, never PROMPT", () => {
+  it("routes only real user-level questions/options to HUMAN", () => {
     // Leak regression: without this rule, GG Coder ending with "want me to…?"
     // or an A/B/C menu reads as "unfinished" and Ken answers for the user.
+    // But the inverse matters too: permission to continue obvious safe work is
+    // NOT a user decision and should be a PROMPT, not a blocker. This is a
+    // principle, not a list of special-case examples.
     expect(prompt).toContain("asking the ");
     expect(prompt).toContain("presenting options");
-    expect(prompt).toContain("never answer on the user's behalf");
-    expect(prompt).toContain("submitting a plan for approval");
+    expect(prompt).toContain("HUMAN only when answering it requires");
+    expect(prompt).toContain("user-level decisions");
+    expect(prompt).toContain("mechanically implied by the user's original ask");
+    expect(prompt).toContain("safe to do without new information");
+    expect(prompt).toContain("Use PROMPT with the concrete next step");
+  });
+
+  it("makes Ken the plan reviewer (no automatic HUMAN on plan submissions)", () => {
+    // In autopilot, a submitted plan is reviewed by Ken himself — approve,
+    // revise, or (rarely) hand a genuine product decision to the user.
+    expect(prompt).toContain("Plans are YOURS to review");
+    expect(prompt).toContain("'Plan under review' section");
+    expect(prompt).toContain("implementation starts immediately");
+    expect(prompt).toContain("Default to approving a sound plan");
+    expect(prompt).toContain("Never IGNORE a plan");
+    // The old auto-HUMAN clause must be gone.
+    expect(prompt).not.toContain("submitting a plan for approval");
   });
 
   it("tells Ken injected transcript lines are his own, not user asks", () => {

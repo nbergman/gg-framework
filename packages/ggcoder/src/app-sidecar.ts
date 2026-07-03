@@ -24,7 +24,11 @@ import { runJsonMode } from "./modes/json-mode.js";
 import type { Provider, ThinkingLevel } from "@kenkaiiii/gg-ai";
 import { AgentSession } from "./core/agent-session.js";
 import { buildKenSystemPrompt, buildKenAutopilotSystemPrompt } from "./core/ken-prompt.js";
-import { buildKenDigest, buildKenAutopilotContext } from "./core/ken-context.js";
+import {
+  buildKenDigest,
+  buildKenAutopilotContext,
+  buildKenAutopilotPlanContext,
+} from "./core/ken-context.js";
 import { parseAutopilotVerdict, type AutopilotVerdict } from "./core/autopilot-verdict.js";
 import {
   isWorkflowCommandText,
@@ -280,7 +284,7 @@ interface HistoryEntryForWire {
    *  the live `autopilot` item — never the raw verdict keyword the model
    *  actually replied with (e.g. `ALL_CLEAR`). */
   autopilot?: {
-    phase: "prompted" | "done" | "human" | "capped";
+    phase: "prompted" | "done" | "human" | "capped" | "plan_approved";
     reason?: string;
     body?: string;
   };
@@ -1094,6 +1098,12 @@ async function createSession(
       } catch {
         content = "";
       }
+      // Record the submitted plan so the autopilot gate can route this turn
+      // into a PLAN review instead of a stale work review (plan mode is
+      // already false here, so the gate's planMode check alone never catches
+      // a submission). setPendingPlan bumps planGeneration, which invalidates
+      // any in-flight Ken plan review racing a user action.
+      setPendingPlan(planPath, content);
       broadcast("plan_exit", { planPath, content });
       return "Plan submitted for user review. Wait for the user to approve, reject, or dismiss it before implementing.";
     },
@@ -1196,6 +1206,29 @@ async function createSession(
   // cycles drift into Ken reviewing against his own last prompt. Cleared
   // whenever the conversation resets (new session / plan accept / task run).
   let injectedAutopilotPrompts: string[] = [];
+  // The plan GG Coder submitted via exit_plan that still awaits a decision
+  // (Ken's auto-review in autopilot, or the user's modal). Path + the content
+  // read at submission time (fallback if the file becomes unreadable).
+  let pendingPlanPath: string | null = null;
+  let pendingPlanContent = "";
+  // Bumped on EVERY pending-plan set/clear. Ken's plan review captures it
+  // before reviewing and re-checks it before acting on the verdict, so a user
+  // Accept/Reject racing an in-flight review always wins — the stale verdict
+  // is discarded silently.
+  let planGeneration = 0;
+
+  function setPendingPlan(planPath: string, content: string): void {
+    pendingPlanPath = planPath;
+    pendingPlanContent = content;
+    planGeneration++;
+  }
+
+  function clearPendingPlan(): void {
+    if (pendingPlanPath === null) return;
+    pendingPlanPath = null;
+    pendingPlanContent = "";
+    planGeneration++;
+  }
 
   // Workflow (prompt-template) commands: built-in + the project's custom
   // `.gg/commands/*.md`. Used to gate autopilot off command turns and to label
@@ -1468,6 +1501,57 @@ async function createSession(
     }
   }
 
+  // One PLAN review: like runAutopilotReview but the digest carries the
+  // submitted plan's markdown (`## Plan under review`) and the plan-review
+  // instruction — Ken judges the plan itself, not finished work. Returns null
+  // on failure; a failure caused by the user's own action racing the review
+  // (cancel or a manual Accept/Reject that bumped planGeneration) stays
+  // SILENT — no autopilot_error — because the user's decision already won.
+  async function runAutopilotPlanReview(originalRequest: string): Promise<AutopilotVerdict | null> {
+    const planPath = pendingPlanPath;
+    if (planPath === null) return null;
+    const genAtStart = planGeneration;
+    autopilotReviewing = true;
+    broadcast("autopilot_review_start", {});
+    try {
+      const ken = await ensureKenAutoSession();
+      // Re-read the plan file (the run may have revised it in place); fall
+      // back to the content captured at exit_plan time.
+      const planContent = await fs.readFile(planPath, "utf-8").catch(() => pendingPlanContent);
+      const digest = buildKenAutopilotPlanContext({
+        cwd,
+        gitBranch,
+        messages: session.getMessages(),
+        originalRequest,
+        injectedPrompts: [...injectedAutopilotPrompts],
+        workflowCommands: await loadWorkflowCommandSpecs(),
+        planContent,
+      });
+      await ken.prompt(digest);
+      if (autopilotCancelled || planGeneration !== genAtStart) return null;
+      return parseAutopilotVerdict(lastAssistantText(ken.getMessages()));
+    } catch (err) {
+      // User action mid-review (manual Accept aborts the kenAuto run): drop
+      // the review silently — the user's decision supersedes Ken's.
+      if (autopilotCancelled || planGeneration !== genAtStart) return null;
+      broadcastError("autopilot_error", "autopilot plan review failed", err);
+      return null;
+    } finally {
+      autopilotReviewing = false;
+      // Apply any model switch that landed mid-review.
+      const pending = pendingKenAutoModel;
+      pendingKenAutoModel = null;
+      if (pending) await syncKenAutoModel(pending.provider, pending.model);
+    }
+  }
+
+  // The prompt fed to the fresh session after a plan is accepted — the SAME
+  // string the webview sends on a manual Accept (see PlanReviewModal's accept
+  // handler in gg-app/src/App.tsx). Keep the two in lockstep so auto- and
+  // manual approval produce identical implementation turns.
+  const IMPLEMENT_PLAN_PROMPT =
+    "The plan has been approved. Implement it now, following each step in order.";
+
   // Drive the review→prompt→review loop for one finished user turn. Only ever
   // called after shouldStartAutopilotCycle approves the turn (POST /prompt or
   // the stranded-queue drain) — never from the task runner, resume, /ken, or
@@ -1477,14 +1561,52 @@ async function createSession(
   async function runAutopilotCycle(originalRequest: string): Promise<void> {
     if (!autopilot || autopilotCancelled) return;
     autopilotActive = true;
+    // Generation captured by the last plan review; acceptPlan re-checks it so
+    // a user Accept/Reject landing mid-review always wins.
+    let planGenAtReview = -1;
     try {
       await driveAutopilotCycle({
-        maxRounds: MAX_AUTOPILOT_ROUNDS,
+        // A plan-pending cycle needs extra rounds: approve+implement and the
+        // post-implement work review each consume one, so +2 keeps a real fix
+        // round available.
+        maxRounds: pendingPlanPath !== null ? MAX_AUTOPILOT_ROUNDS + 2 : MAX_AUTOPILOT_ROUNDS,
         isCancelled: () => autopilotCancelled,
-        // An injected run entering plan mode halts the cycle (autopilot_human
-        // with the plan-hold reason) — Ken never prompts into a read-only
-        // plan-mode session or answers the plan modal for the user.
+        // An injected run entering plan mode WITHOUT submitting (enter_plan,
+        // no exit_plan) halts the cycle — Ken never prompts into a read-only
+        // plan-mode session. A submitted plan takes the planPending branch.
         isPlanMode: () => session.getPlanMode(),
+        planPending: () => pendingPlanPath !== null,
+        reviewPlan: async () => {
+          planGenAtReview = planGeneration;
+          return runAutopilotPlanReview(originalRequest);
+        },
+        // Auto-accept: the inlined POST /plan/accept body. Returns false when
+        // the plan generation moved since the review (user acted) — the cycle
+        // exits silently and the user's action stands.
+        acceptPlan: async () => {
+          if (pendingPlanPath === null || planGeneration !== planGenAtReview) return false;
+          const planPath = pendingPlanPath;
+          try {
+            await session.newSession();
+            injectedAutopilotPrompts = [];
+            titleGenerated = false;
+            await session.setApprovedPlan(planPath);
+          } catch (err) {
+            broadcastError("autopilot_error", "autopilot plan accept failed", err);
+            return false;
+          }
+          clearPendingPlan();
+          // Ordering is load-bearing: the webview reads its still-open plan
+          // modal state (step count) on autopilot_plan_accepted, and
+          // session_reset clears it — accepted must land first.
+          broadcast("autopilot_plan_accepted", {});
+          broadcast("session_reset", {});
+          // Persisted into the NEW session so a resume shows the marker.
+          void session.persistAutopilotMarker("plan_approved");
+          return true;
+        },
+        runImplement: () =>
+          runAgent(IMPLEMENT_PLAN_PROMPT, () => session.prompt(IMPLEMENT_PLAN_PROMPT)),
         // Lean context per user turn: wipe prior review history so each new
         // turn starts cheap, while within this cycle the few review messages
         // persist so Ken remembers what he already asked GG Coder to fix.
@@ -1498,6 +1620,10 @@ async function createSession(
         // streams normally; the shared finally never re-triggers autopilot,
         // so this can't recurse.
         onInjected: (body, round) => {
+          // A revision injection supersedes the pending plan — if the run
+          // resubmits via exit_plan, onExitPlan re-sets it (no-op for work-
+          // branch injections, where nothing is pending).
+          clearPendingPlan();
           injectedAutopilotPrompts.push(body);
           broadcast("autopilot_prompted", { round, body });
           void session.persistAutopilotMarker("prompted", { body });
@@ -1543,6 +1669,9 @@ async function createSession(
         if (!next) return;
         broadcast("queued", { count: session.getQueuedCount() });
         if (!next.text.trim() && next.attachments.length === 0) continue;
+        // A queued message draining as a fresh turn supersedes any pending
+        // plan, exactly like a direct POST /prompt turn.
+        clearPendingPlan();
         const workflowCommand =
           next.attachments.length === 0 &&
           isWorkflowCommandText(next.text, await loadWorkflowCommandSpecs());
@@ -1559,6 +1688,9 @@ async function createSession(
           enabled: autopilot,
           cancelled: autopilotCancelled,
           planMode: session.getPlanMode(),
+          // A submitted plan (exit_plan fired) routes into the PLAN review
+          // branch — the cycle reviews the plan itself instead of skipping.
+          planPending: pendingPlanPath !== null,
           workflowCommand,
           assistantMessagesAdded: countAssistantMessages(session.getMessages()) - assistantsBefore,
           // Skip the review API call outright for turns that only started a
@@ -1570,6 +1702,9 @@ async function createSession(
           ),
         });
         if (decision.start) {
+          log("INFO", "app-sidecar", "autopilot cycle starting (queued turn)", {
+            kind: decision.kind,
+          });
           await runAutopilotCycle(next.text);
         } else if (autopilot) {
           log("INFO", "app-sidecar", "autopilot skipped (queued turn)", {
@@ -1594,6 +1729,7 @@ async function createSession(
     // Fresh session per task so one task's context never bleeds into the next.
     await session.newSession();
     injectedAutopilotPrompts = [];
+    clearPendingPlan();
     titleGenerated = false;
     broadcast("session_reset", {});
     markTaskInProgress(cwd, task.id);
@@ -2153,6 +2289,10 @@ async function createSession(
         // Fresh user turn: clear any cancel flag left from a prior cycle so this
         // turn's autopilot review can run.
         autopilotCancelled = false;
+        // A typed message while a plan modal/review is pending (reject,
+        // feedback, anything) supersedes the pending plan — the bump also
+        // invalidates any in-flight Ken plan review.
+        clearPendingPlan();
         // Gate inputs captured around the run: whether this turn is a workflow
         // slash command (attachment prompts skip slash expansion entirely), and
         // how many assistant messages the run actually adds. Computed even when
@@ -2189,6 +2329,9 @@ async function createSession(
           enabled: autopilot,
           cancelled: autopilotCancelled,
           planMode: session.getPlanMode(),
+          // A submitted plan (exit_plan fired) routes into the PLAN review
+          // branch — the cycle reviews the plan itself instead of skipping.
+          planPending: pendingPlanPath !== null,
           workflowCommand,
           assistantMessagesAdded: countAssistantMessages(session.getMessages()) - assistantsBefore,
           // Skip the review API call outright for turns that only started a
@@ -2200,6 +2343,7 @@ async function createSession(
           ),
         });
         if (decision.start) {
+          log("INFO", "app-sidecar", "autopilot cycle starting", { kind: decision.kind });
           await runAutopilotCycle(text);
         } else if (autopilot) {
           log("INFO", "app-sidecar", "autopilot skipped", { reason: decision.reason });
@@ -2607,6 +2751,7 @@ async function createSession(
         .newSession()
         .then(() => {
           injectedAutopilotPrompts = [];
+          clearPendingPlan();
           broadcast("session_reset", {});
           json(res, 200, { ok: true });
         })
@@ -2637,6 +2782,24 @@ async function createSession(
         if (running) {
           json(res, 409, { error: "cannot accept a plan while the agent is running" });
           return;
+        }
+        // Manual accept, possibly racing Ken's autopilot plan review: the user
+        // always wins. Bump the plan generation (invalidates any in-flight
+        // review's verdict), stop the cycle, abort a mid-prompt review on the
+        // kenAuto session, and clear the spinner — autopilot_ignored renders
+        // nothing, so no stale "approve or reject" bubble ever lands. The
+        // webview's follow-up "implement" /prompt arrives as a fresh turn
+        // (resetting autopilotCancelled), so the implementation still gets its
+        // normal post-run review; if it lands while the cycle is winding down
+        // it queues and runStrandedQueue drains it as a fresh turn.
+        clearPendingPlan();
+        autopilotCancelled = true;
+        kenAutoAbort.abort();
+        kenAutoAbort = new AbortController();
+        kenAutoSession?.setSignal(kenAutoAbort.signal);
+        if (autopilotReviewing) {
+          autopilotReviewing = false;
+          broadcast("autopilot_ignored", {});
         }
         try {
           await session.newSession();
