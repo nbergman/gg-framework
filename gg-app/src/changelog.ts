@@ -22,6 +22,14 @@ export interface ChangelogEntry {
 /** Newest first. Prepended by the `/release` flow. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.14.4",
+    date: "2026-07-03",
+    items: [
+      "Edits just got rock solid. I killed a nasty glitch where a big change could arrive half-broken and get rejected, so now it quietly retries and lands clean the first time you see it.",
+      "Your projects stop disappearing. If a folder had an underscore in its name it could vanish from the picker even with all its sessions safe on disk, and I tracked down exactly why and fixed it. Every project shows up now.",
+    ],
+  },
+  {
     version: "0.14.3",
     date: "2026-07-03",
     items: [
