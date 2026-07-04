@@ -1,5 +1,14 @@
 # @kenkaiiii/ggcoder
 
+## 5.8.4
+
+### Patch Changes
+
+- Route read-only scout sub-agents (recon/research) to each provider's fast/cheap model via `costTier`, cutting sub-agent latency and spend with no quality risk. Writers and default sub-agents keep the parent model.
+  - @kenkaiiii/gg-ai@5.8.4
+  - @kenkaiiii/gg-agent@5.8.4
+  - @kenkaiiii/gg-core@5.8.4
+
 ## 5.8.3
 
 ### Patch Changes
