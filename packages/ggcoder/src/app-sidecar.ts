@@ -38,7 +38,7 @@ import {
   isMechanicalOnlyTurn,
   type WorkflowCommandSpec,
 } from "./core/autopilot-gate.js";
-import { driveAutopilotCycle } from "./core/autopilot-cycle.js";
+import { driveAutopilotCycle, frameAutopilotInjection } from "./core/autopilot-cycle.js";
 import { validateKenModelPref, effectiveKenModel, type KenModelPref } from "./core/ken-model.js";
 import type { KenTurnPayload, AppMarkerPayload } from "./core/session-manager.js";
 import {
@@ -1644,8 +1644,15 @@ async function createSession(
           void session.persistAutopilotMarker("plan_approved");
           return true;
         },
-        runImplement: () =>
-          runAgent(IMPLEMENT_PLAN_PROMPT, () => session.prompt(IMPLEMENT_PLAN_PROMPT)),
+        runImplement: () => {
+          // Autopilot-injected run: frame it so GG Coder knows no human is
+          // watching the implementation. Record the framed string so Ken's
+          // digest labels it as injected, not as the user's ask. The run_start
+          // label stays the clean prompt.
+          const framed = frameAutopilotInjection(IMPLEMENT_PLAN_PROMPT);
+          injectedAutopilotPrompts.push(framed);
+          return runAgent(IMPLEMENT_PLAN_PROMPT, () => session.prompt(framed));
+        },
         // Lean context per user turn: wipe prior review history so each new
         // turn starts cheap, while within this cycle the few review messages
         // persist so Ken remembers what he already asked GG Coder to fix.
@@ -1663,11 +1670,17 @@ async function createSession(
           // resubmits via exit_plan, onExitPlan re-sets it (no-op for work-
           // branch injections, where nothing is pending).
           clearPendingPlan();
-          injectedAutopilotPrompts.push(body);
+          // Record the FRAMED string (what actually lands in the build session,
+          // see runPrompt) so Ken's digest matches and labels it as injected.
+          // The webview marker + persisted body stay the CLEAN prompt so the UI
+          // shows Ken's actual instruction, not the autopilot preamble.
+          injectedAutopilotPrompts.push(frameAutopilotInjection(body));
           broadcast("autopilot_prompted", { round, body });
           void session.persistAutopilotMarker("prompted", { body });
         },
-        runPrompt: (body) => runAgent(body, () => session.prompt(body)),
+        // Autopilot-injected run: GG Coder receives the framed prompt (no human
+        // is watching this turn) while run_start keeps the clean label.
+        runPrompt: (body) => runAgent(body, () => session.prompt(frameAutopilotInjection(body))),
         emit: (event) => {
           // Persist the terminal verdict marker so a resumed session renders the
           // same Ken bubble the live run showed instead of dropping it or
