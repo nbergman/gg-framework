@@ -1,5 +1,14 @@
 # @kenkaiiii/ggcoder
 
+## 5.8.8
+
+### Patch Changes
+
+- Fix transient Ken sessions leaking to the session store (compact() and newSession() now respect the transient flag), harden autopilot verdict parsing to recover a buried line-start PROMPT keyword, and tighten Ken's autopilot contract so reasoning prose never precedes the verdict.
+  - @kenkaiiii/gg-ai@5.8.8
+  - @kenkaiiii/gg-agent@5.8.8
+  - @kenkaiiii/gg-core@5.8.8
+
 ## 5.8.7
 
 ### Patch Changes
