@@ -22,6 +22,15 @@ export interface ChangelogEntry {
 /** Newest first. Prepended by the `/release` flow. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.14.10",
+    date: "2026-07-06",
+    items: [
+      "Edits just got surgical. I taught the agent to pin the exact lines it wants to change with tiny fingerprints instead of retyping your code, so edits land right the first time, burn fewer tokens, and can never scribble over a file that changed under its feet. On repetitive code it now says in 39 tokens what used to take 160.",
+      "The agent's terminal grew a memory. Multi-step shell work can now run in one living session where cd, environment variables, and setup carry over between commands. Less repeating itself, more getting things done.",
+      "I benchmarked all of this against a live model before shipping it. Equal or better accuracy, faster on almost every task, cheaper on every one. Receipts, not vibes.",
+    ],
+  },
+  {
     version: "0.14.9",
     date: "2026-07-06",
     items: [
