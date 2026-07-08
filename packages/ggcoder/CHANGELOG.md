@@ -1,5 +1,14 @@
 # @kenkaiiii/ggcoder
 
+## 5.9.3
+
+### Patch Changes
+
+- Fix Gemini models over Code Assist OAuth: use the GA IDs from gemini-cli (`gemini-3.1-flash-lite`, wire name `gemini-3-flash` for Gemini 3.5 Flash), add Gemini 3.1 Pro (Preview) to the registry, and surface account-gated 404s as a clear entitlement message with actionable guidance instead of a raw provider error body.
+  - @kenkaiiii/gg-ai@5.9.3
+  - @kenkaiiii/gg-agent@5.9.3
+  - @kenkaiiii/gg-core@5.9.3
+
 ## 5.9.2
 
 ### Patch Changes
