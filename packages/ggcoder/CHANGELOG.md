@@ -1,5 +1,14 @@
 # @kenkaiiii/ggcoder
 
+## 5.9.2
+
+### Patch Changes
+
+- Fix retroactive XP seeding so heavy prior users spread across levels 15-25 instead of all clamping onto level 15. Full credit up to level 15, then diminishing returns beyond, hard-capped at level 25.
+  - @kenkaiiii/gg-ai@5.9.2
+  - @kenkaiiii/gg-agent@5.9.2
+  - @kenkaiiii/gg-core@5.9.2
+
 ## 5.9.1
 
 ### Patch Changes
