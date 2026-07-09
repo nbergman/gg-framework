@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.78
+
+### Patch Changes
+
+- @kenkaiiii/ggcoder@5.9.7
+- @kenkaiiii/gg-ai@5.9.7
+- @kenkaiiii/gg-agent@5.9.7
+
 ## 0.7.77
 
 ### Patch Changes
