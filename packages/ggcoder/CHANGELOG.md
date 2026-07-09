@@ -1,5 +1,14 @@
 # @kenkaiiii/ggcoder
 
+## 5.9.5
+
+### Patch Changes
+
+- Add GPT-5.6 Sol, Terra, and Luna models to the registry; remove GPT-5.4, GPT-5.4 Mini, and GPT-5.3 Codex. Fix provider error hints to reference the model selector instead of CLI-only slash commands so they work in both the desktop app and the CLI.
+  - @kenkaiiii/gg-ai@5.9.5
+  - @kenkaiiii/gg-agent@5.9.5
+  - @kenkaiiii/gg-core@5.9.5
+
 ## 5.9.4
 
 ### Patch Changes
