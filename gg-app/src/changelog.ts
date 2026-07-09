@@ -22,6 +22,13 @@ export interface ChangelogEntry {
 /** Newest first. Prepended by the `/release` flow. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.14.18",
+    date: "2026-07-10",
+    items: [
+      "GPT-5.6's full power dial is finally yours. I opened every step from quick and light to maximum firepower, so you can choose exactly how hard Sol, Terra, or Luna thinks on every task.",
+    ],
+  },
+  {
     version: "0.14.17",
     date: "2026-07-10",
     items: [
