@@ -1,5 +1,14 @@
 # @kenkaiiii/ggcoder
 
+## 5.9.6
+
+### Patch Changes
+
+- Retry read-only sub-agents on the active parent model when the cheaper model is unavailable.
+  - @kenkaiiii/gg-ai@5.9.6
+  - @kenkaiiii/gg-agent@5.9.6
+  - @kenkaiiii/gg-core@5.9.6
+
 ## 5.9.5
 
 ### Patch Changes
