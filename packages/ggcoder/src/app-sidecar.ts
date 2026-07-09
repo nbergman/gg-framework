@@ -50,7 +50,14 @@ import {
   autopilotMarkerCopySeed,
 } from "./core/session-history.js";
 import { AuthStorage } from "./core/auth-storage.js";
-import { MOONSHOT_OAUTH_KEY, XIAOMI_CREDITS_KEY } from "@kenkaiiii/gg-core";
+import {
+  fetchSubscriptionUsage,
+  MOONSHOT_OAUTH_KEY,
+  SubscriptionUsageError,
+  XIAOMI_CREDITS_KEY,
+  type SubscriptionUsageProvider,
+  type SubscriptionUsageSnapshot,
+} from "@kenkaiiii/gg-core";
 import { loginAnthropic } from "./core/oauth/anthropic.js";
 import { loginOpenAI } from "./core/oauth/openai.js";
 import { loginGemini } from "./core/oauth/gemini.js";
@@ -711,6 +718,81 @@ async function main(): Promise<void> {
       ctx.broadcast("progress", { ...snapshot, origin: ctx.id === originId });
   });
 
+  type UsageResult =
+    | (SubscriptionUsageSnapshot & { connected: true; error?: never })
+    | {
+        provider: SubscriptionUsageProvider;
+        displayName: string;
+        connected: boolean;
+        windows: [];
+        fetchedAt: number;
+        error?: string;
+      };
+  const usageCache = new Map<
+    SubscriptionUsageProvider,
+    { expiresAt: number; result: UsageResult }
+  >();
+  const usageRequests = new Map<SubscriptionUsageProvider, Promise<UsageResult>>();
+
+  async function fetchUsageProvider(provider: SubscriptionUsageProvider): Promise<UsageResult> {
+    const displayName = provider === "anthropic" ? "Anthropic" : "Codex";
+    if (!(await auth.hasProviderAuth(provider))) {
+      return { provider, displayName, connected: false, windows: [], fetchedAt: Date.now() };
+    }
+    try {
+      let credentials = await auth.resolveCredentials(provider);
+      try {
+        return { ...(await fetchSubscriptionUsage(provider, credentials)), connected: true };
+      } catch (error) {
+        // A provider can revoke an access token before its stored expiry. Refresh
+        // once on 401, matching inference auth recovery, then retry the usage call.
+        if (error instanceof SubscriptionUsageError && error.status === 401) {
+          credentials = await auth.resolveCredentials(provider, { forceRefresh: true });
+          return { ...(await fetchSubscriptionUsage(provider, credentials)), connected: true };
+        }
+        throw error;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log("WARN", "app-sidecar", "subscription usage fetch failed", { provider, message });
+      const connected = await auth.hasProviderAuth(provider);
+      return {
+        provider,
+        displayName,
+        connected,
+        windows: [],
+        fetchedAt: Date.now(),
+        error: connected ? "Usage is temporarily unavailable." : undefined,
+      };
+    }
+  }
+
+  async function subscriptionUsage(provider: SubscriptionUsageProvider): Promise<UsageResult> {
+    const cached = usageCache.get(provider);
+    if (cached && cached.expiresAt > Date.now()) return cached.result;
+    const inFlight = usageRequests.get(provider);
+    if (inFlight) return inFlight;
+    const request = fetchUsageProvider(provider);
+    usageRequests.set(provider, request);
+    try {
+      const result = await request;
+      // Anthropic can return utilization before it assigns reset timestamps
+      // (notably before the account's first active request). Retry that partial
+      // snapshot quickly; complete snapshots keep the normal one-minute cache.
+      const missingReset =
+        result.connected &&
+        result.windows.length > 0 &&
+        result.windows.some((window) => window.resetsAt === undefined);
+      usageCache.set(provider, {
+        result,
+        expiresAt: Date.now() + (missingReset ? 10_000 : 60_000),
+      });
+      return result;
+    } finally {
+      if (usageRequests.get(provider) === request) usageRequests.delete(provider);
+    }
+  }
+
   /** Resolve the target session id: the `x-gg-session` header, else a
    *  `?session=` query param (used by the SSE /events connection). */
   function sessionIdFromReq(req: http.IncomingMessage, url: string): string | null {
@@ -789,6 +871,26 @@ async function main(): Promise<void> {
     // session exists; per-session callers still work through the same endpoint.
     if (method === "GET" && url === "/progress") {
       daemonJson(res, 200, progress.snapshot());
+      return;
+    }
+
+    // Subscription quota is account-wide, not project/session-specific. OAuth
+    // tokens stay in this daemon; only the active provider's normalized snapshot
+    // reaches the webview.
+    if (method === "GET" && (url === "/usage" || url.startsWith("/usage?"))) {
+      void (async () => {
+        const provider = new URL(url, `http://${host}`).searchParams.get("provider");
+        if (provider !== "anthropic" && provider !== "openai") {
+          daemonJson(res, 400, { error: "unsupported usage provider" });
+          return;
+        }
+        daemonJson(res, 200, await subscriptionUsage(provider));
+      })().catch((error) => {
+        log("ERROR", "app-sidecar", "subscription usage request failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        daemonJson(res, 500, { error: "Usage is temporarily unavailable." });
+      });
       return;
     }
 
