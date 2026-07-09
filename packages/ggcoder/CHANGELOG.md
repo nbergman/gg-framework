@@ -1,5 +1,17 @@
 # @kenkaiiii/ggcoder
 
+## 5.10.0
+
+### Minor Changes
+
+- Add OAuth subscription usage snapshots for Anthropic and OpenAI Codex.
+
+### Patch Changes
+
+- @kenkaiiii/gg-ai@5.10.0
+- @kenkaiiii/gg-agent@5.10.0
+- @kenkaiiii/gg-core@5.10.0
+
 ## 5.9.7
 
 ### Patch Changes
