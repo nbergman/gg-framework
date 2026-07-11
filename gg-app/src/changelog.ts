@@ -22,6 +22,13 @@ export interface ChangelogEntry {
 /** Newest first. Prepended by the `/release` flow. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.18.1",
+    date: "2026-07-12",
+    items: [
+      "Your `Radio` volume control is finally silky and instant. I stopped the music from cutting out, made every level change land right away, and kept the slider locked to your hand while you drag.",
+    ],
+  },
+  {
     version: "0.18.0",
     date: "2026-07-11",
     items: [
