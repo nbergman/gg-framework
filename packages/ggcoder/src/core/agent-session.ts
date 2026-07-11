@@ -46,6 +46,8 @@ import {
   type ProcessManager,
 } from "../tools/index.js";
 import type { BackgroundProcess } from "./process-manager.js";
+import type { SubAgentManager } from "./subagent-manager.js";
+import { applyAsyncSubagentPolicy } from "./subagent-policy.js";
 import { MCPClientManager, getAllMcpServers } from "./mcp/index.js";
 import { DeferredToolCatalog } from "./mcp/deferred-catalog.js";
 import { createToolSearchTool } from "../tools/tool-search.js";
@@ -95,6 +97,7 @@ export interface AgentSessionOptions {
   sessionId?: string;
   continueRecent?: boolean;
   maxTokens?: number;
+  maxTurns?: number;
   thinkingLevel?: ThinkingLevel;
   signal?: AbortSignal;
   /** Prefix used for provider prompt-cache routing keys. */
@@ -161,6 +164,8 @@ export interface AgentSessionOptions {
    * main build session. Default (undefined) = follow `speedProfile`.
    */
   forceLongCacheRetention?: boolean;
+  /** Hidden persistent subagent workers omit the async orchestration tool suite. */
+  subagentWorker?: boolean;
 }
 
 // ── State ──────────────────────────────────────────────────
@@ -180,14 +185,6 @@ export interface AgentSessionState {
 }
 
 // ── Agent Session ──────────────────────────────────────────
-
-const ULTRA_ORCHESTRATION_MARKER = "\n\n## Ultra orchestration\n";
-const ULTRA_ORCHESTRATION_PROMPT =
-  `${ULTRA_ORCHESTRATION_MARKER}` +
-  `Proactively delegate substantial independent workstreams to subagents and run independent delegates in parallel. ` +
-  `Keep small, tightly coupled, or sequential work in the main agent. Give each delegate a focused scope, ` +
-  `then synthesize and verify their results before finishing. Delegation does not expand the user's requested scope ` +
-  `or bypass approval boundaries.`;
 
 export class AgentSession {
   readonly eventBus = new EventBus();
@@ -254,6 +251,11 @@ export class AgentSession {
   private userQueue: Array<{ text: string; attachments: SessionAttachment[] }> = [];
   private processManager?: ProcessManager;
   private lspManager?: LspManager;
+  private subAgentManager?: SubAgentManager;
+  private managerAbortSignal?: AbortSignal;
+  private readonly managerAbortHandler = () => {
+    void this.subAgentManager?.interruptAll();
+  };
   private mcpManager?: MCPClientManager;
   /** Deferred MCP tools awaiting discovery via tool_search (bench A win). */
   private mcpCatalog?: DeferredToolCatalog;
@@ -346,28 +348,33 @@ export class AgentSession {
       globalAgentsDir: paths.agentsDir,
       projectDir: this.cwd,
     });
-    const { tools, processManager, rebuildReadTool, lspManager } = await createTools(this.cwd, {
-      agents,
-      skills: this.skills,
-      provider: this.provider,
-      model: this.model,
-      lspDiagnostics: this.settingsManager.get("lspDiagnostics"),
-      authStorage: this.authStorage,
-      // Lazy — sessionId/model/provider can change after createTools() runs, so
-      // sub-agent spawns read the current parent state at execution time.
-      getProvider: () => this.provider,
-      getModel: () => this.model,
-      getCacheKey: () => this.getPromptCacheKey(),
-      // Plan mode: only wired when the host supplies callbacks. The ref is
-      // shared so bash/edit/write enforce read-only restrictions live.
-      ...(this.opts.onEnterPlan || this.opts.onExitPlan
-        ? {
-            planModeRef: this.planModeRef,
-            onEnterPlan: this.opts.onEnterPlan,
-            onExitPlan: this.opts.onExitPlan,
-          }
-        : {}),
-    });
+    const { tools, processManager, rebuildReadTool, lspManager, subAgentManager } =
+      await createTools(this.cwd, {
+        agents,
+        skills: this.skills,
+        provider: this.provider,
+        model: this.model,
+        lspDiagnostics: this.settingsManager.get("lspDiagnostics"),
+        authStorage: this.authStorage,
+        // Lazy — sessionId/model/provider can change after createTools() runs, so
+        // sub-agent spawns read the current parent state at execution time.
+        getProvider: () => this.provider,
+        getModel: () => this.model,
+        getThinkingLevel: () => this.thinkingLevel,
+        getBaseUrl: () => this.baseUrl,
+        getCacheKey: () => this.getPromptCacheKey(),
+        disableAsyncSubagents: this.opts.subagentWorker,
+        onSubAgentState: (snapshot) => this.eventBus.emit("subagent_state", snapshot),
+        // Plan mode: only wired when the host supplies callbacks. The ref is
+        // shared so bash/edit/write enforce read-only restrictions live.
+        ...(this.opts.onEnterPlan || this.opts.onExitPlan
+          ? {
+              planModeRef: this.planModeRef,
+              onEnterPlan: this.opts.onEnterPlan,
+              onExitPlan: this.opts.onExitPlan,
+            }
+          : {}),
+      });
     // Apply the optional tool allow-list (read-only advisory sessions). Filtering
     // here means the excluded tools are never registered with the agent loop, so
     // a hallucinated call can't mutate the repo — and buildSystemPrompt below is
@@ -376,6 +383,8 @@ export class AgentSession {
     this.rebuildReadTool = rebuildReadTool;
     this.processManager = processManager;
     this.lspManager = lspManager;
+    this.subAgentManager = subAgentManager;
+    this.bindManagerCancellation(this.opts.signal);
 
     // Connect MCP servers. The connect attempt itself can block for up to the
     // per-server connect timeout (~30s) — a slow stdio server such as a
@@ -925,6 +934,7 @@ export class AgentSession {
         tools: this.tools,
         webSearch: true,
         maxTokens: this.maxTokens,
+        maxTurns: this.opts.maxTurns,
         thinking: this.thinkingLevel,
         apiKey,
         baseUrl: effectiveBaseUrl,
@@ -1627,26 +1637,31 @@ export class AgentSession {
     this.syncUltraOrchestrationPrompt();
   }
 
-  /** Ultra is a Codex client preset: max API effort plus proactive local delegation. */
+  /** Sol/Terra Ultra delegates proactively; lower levels require an explicit request. */
   private syncUltraOrchestrationPrompt(): void {
     const systemMessage = this.messages[0];
     if (systemMessage?.role !== "system" || typeof systemMessage.content !== "string") return;
 
-    const markerIndex = systemMessage.content.indexOf(ULTRA_ORCHESTRATION_MARKER);
-    const basePrompt =
-      markerIndex === -1 ? systemMessage.content : systemMessage.content.slice(0, markerIndex);
-    const supportsUltra =
-      this.provider === "openai" &&
-      (this.model === "gpt-5.6-sol" || this.model === "gpt-5.6-terra") &&
-      this.thinkingLevel === "ultra" &&
-      this.tools.some((tool) => tool.name === "subagent");
-
-    systemMessage.content = supportsUltra ? basePrompt + ULTRA_ORCHESTRATION_PROMPT : basePrompt;
+    systemMessage.content = applyAsyncSubagentPolicy(
+      systemMessage.content,
+      this.provider,
+      this.model,
+      this.thinkingLevel,
+      this.tools.map((tool) => tool.name),
+    );
   }
 
   /** Replace the abort signal (e.g. after cancellation). */
   setSignal(signal: AbortSignal): void {
     this.opts = { ...this.opts, signal };
+    this.bindManagerCancellation(signal);
+  }
+
+  private bindManagerCancellation(signal: AbortSignal | undefined): void {
+    this.managerAbortSignal?.removeEventListener("abort", this.managerAbortHandler);
+    this.managerAbortSignal = signal;
+    signal?.addEventListener("abort", this.managerAbortHandler, { once: true });
+    if (signal?.aborted) this.managerAbortHandler();
   }
 
   /** True when speedProfile is "optimized" (1-h cache TTL + pre-warm), or the
@@ -1681,9 +1696,10 @@ export class AgentSession {
   }
 
   async dispose(): Promise<void> {
+    this.managerAbortSignal?.removeEventListener("abort", this.managerAbortHandler);
     this.processManager?.shutdownAll();
     this.lspManager?.shutdownAll();
-    await this.mcpManager?.dispose();
+    await Promise.all([this.subAgentManager?.shutdownAll(), this.mcpManager?.dispose()]);
     await this.extensionLoader.deactivateAll();
     this.eventBus.removeAllListeners();
     this.messages = [];

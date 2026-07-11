@@ -676,14 +676,14 @@ body {
 .home-actions {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  width: min(320px, 80vw);
+  gap: 10px;
+  width: min(280px, 80vw);
 }
-/* Home actions are the brand showcase — full-width pills, a touch taller. */
+/* Home navigation uses the same compact sizing as modal actions. */
 .home-btn {
   width: 100%;
-  font-size: 15px;
-  padding: 14px 22px;
+  font-size: 13px;
+  padding: 8px 16px;
 }
 /* Projects + its settings icon sit on one row; the pill flexes, icon is fixed. */
 .home-projects-row {
@@ -696,8 +696,8 @@ body {
 }
 .home-settings {
   flex: 0 0 auto;
-  width: 48px;
-  height: 48px;
+  width: 36px;
+  height: 36px;
 }
 /* Serve button while live: glossy green pill, so "on" reads at a glance. */
 .home-serve-active {
@@ -1107,10 +1107,14 @@ body {
 }
 /* Modal actions are glossy pills: neutral by default, .primary = violet. */
 .modal-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   background: var(--gloss-neutral);
   color: var(--text-secondary);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: var(--radius-button);
+  border-radius: var(--radius-pill);
   box-shadow: var(--gloss-shadow-neutral);
   font-family: var(--sans);
   font-size: 13px;
@@ -1428,7 +1432,7 @@ body {
 /* Scope toggle on its own row (Global / Project). */
 .mcp-scope-toggle {
   display: flex;
-  gap: 4px;
+  gap: 10px;
   margin-top: 10px;
 }
 /* In-transcript task header row (shown at the top of a task's session). */
@@ -1501,7 +1505,7 @@ body {
 .badge {
   display: inline-flex;
   align-items: center;
-  border: 1px solid;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: var(--radius-pill);
   padding: 1px 8px;
   font-family: var(--mono);
@@ -1509,6 +1513,9 @@ body {
   font-weight: 600;
   line-height: 1.5;
   white-space: nowrap;
+  color: var(--text-secondary);
+  background: var(--gloss-neutral);
+  box-shadow: var(--gloss-shadow-neutral);
 }
 .picker-preview {
   flex: 1;

@@ -308,4 +308,38 @@ describe("useAgentEvents", () => {
     });
     expect(setRunning).toHaveBeenLastCalledWith(false);
   });
+
+  it("upserts persistent async agents by agent_id through idle and interrupted states", () => {
+    const { hook, getItems } = setup();
+    const base = {
+      agent_id: "abcd1234",
+      task_name: "scan auth",
+      started_at: 1,
+      updated_at: 2,
+      elapsed_ms: 10,
+      turn_count: 0,
+      tool_use_count: 0,
+      token_usage: { input: 0, output: 0 },
+    };
+    act(() =>
+      hook.result.current.handleEvent(ev("subagent_state", { ...base, state: "starting" })),
+    );
+    act(() =>
+      hook.result.current.handleEvent(
+        ev("subagent_state", {
+          ...base,
+          state: "completed",
+          elapsed_ms: 30,
+          tool_use_count: 2,
+          token_usage: { input: 10, output: 3 },
+        }),
+      ),
+    );
+    const groups = getItems().filter((item) => item.kind === "subagent_group");
+    expect(groups).toHaveLength(1);
+    const group = groups[0];
+    expect(group?.kind === "subagent_group" ? group.agents : []).toMatchObject([
+      { toolCallId: "abcd1234", status: "idle", async: true, toolUseCount: 2 },
+    ]);
+  });
 });

@@ -25,6 +25,21 @@ export function setWindowTitle(title: string): void {
   void appWindow.setTitle(title).catch(() => {});
 }
 
+export interface SubAgentStatePayload {
+  agent_id: string;
+  task_name: string;
+  state: "starting" | "running" | "completed" | "failed" | "interrupted" | "closed";
+  started_at: number;
+  updated_at: number;
+  elapsed_ms: number;
+  current_activity?: string;
+  turn_count: number;
+  tool_use_count: number;
+  token_usage: { input: number; output: number };
+  output?: string;
+  error?: string;
+}
+
 export interface SidecarEvent {
   type: string;
   data: unknown;

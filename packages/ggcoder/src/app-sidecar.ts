@@ -21,6 +21,7 @@ import { parseArgs } from "node:util";
 import { formatError, type ToolResultContent } from "@kenkaiiii/gg-ai";
 import type { AddressInfo } from "node:net";
 import { runJsonMode } from "./modes/json-mode.js";
+import { runSubagentWorkerMode } from "./modes/subagent-worker-mode.js";
 import type { Provider, ThinkingLevel } from "@kenkaiiii/gg-ai";
 import { AgentSession } from "./core/agent-session.js";
 import { buildKenSystemPrompt, buildKenAutopilotSystemPrompt } from "./core/ken-prompt.js";
@@ -659,6 +660,11 @@ function daemonJson(res: http.ServerResponse, status: number, body: unknown): vo
 }
 
 async function main(): Promise<void> {
+  // Hidden persistent-worker dispatch must win before strict JSON/server parsing.
+  if (process.argv.includes("--subagent-worker")) {
+    await runSubagentWorkerMode();
+    return;
+  }
   // Sub-agent JSON-mode dispatch must win before any sidecar/server setup.
   if (await runJsonModeIfRequested()) return;
 
@@ -1355,6 +1361,7 @@ async function createSession(
   });
   session.eventBus.on("model_change", (d) => broadcast("model_change", d));
   session.eventBus.on("hook", (d) => broadcast("hook", d));
+  session.eventBus.on("subagent_state", (d) => broadcast("subagent_state", d));
   session.eventBus.on("compaction_start", (d) => broadcast("compaction_start", d));
   session.eventBus.on("compaction_end", (d) => broadcast("compaction_end", d));
 
@@ -2494,13 +2501,19 @@ async function createSession(
                 id: string;
                 name: string;
                 args: Record<string, unknown>;
-              } => c.type === "tool_call" && c.name === "subagent",
+              } => c.type === "tool_call" && (c.name === "subagent" || c.name === "spawn_agent"),
             );
             if (subagentCalls.length > 0) {
               const agents = subagentCalls.map((c) => {
                 const result = toolResultMap.get(c.id);
                 return {
-                  agentName: typeof c.args?.agent === "string" ? c.args.agent : undefined,
+                  agentName:
+                    c.name === "spawn_agent" && typeof c.args?.task_name === "string"
+                      ? c.args.task_name
+                      : typeof c.args?.agent === "string"
+                        ? c.args.agent
+                        : undefined,
+                  // Async workers are intentionally non-resumable; restored rows are historical.
                   status: result?.isError ? ("error" as const) : ("done" as const),
                   toolUseCount: 0,
                 };

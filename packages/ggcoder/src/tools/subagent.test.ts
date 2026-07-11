@@ -8,6 +8,7 @@ vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 
 import type { AgentDefinition } from "../core/agents.js";
 import { createSubAgentTool, isModelUnavailableError } from "./subagent.js";
+import { MAX_BLOCKING_SUBAGENT_DEPTH, SUB_AGENT_DEPTH_ENV } from "./subagent-shared.js";
 
 class MockChildProcess extends EventEmitter {
   readonly stdout = new PassThrough();
@@ -78,6 +79,29 @@ describe("createSubAgentTool fast-model fallback", () => {
       content: "Sub-agent failed (exit 1): usage limit reached",
     });
     expect(spawnedModels()).toEqual(["gpt-5.6-luna"]);
+  });
+
+  it("keeps the blocking contract while rejecting recursive process storms", async () => {
+    const previousDepth = process.env[SUB_AGENT_DEPTH_ENV];
+    process.env[SUB_AGENT_DEPTH_ENV] = String(MAX_BLOCKING_SUBAGENT_DEPTH);
+    try {
+      const tool = createSubAgentTool(
+        process.cwd(),
+        [owl],
+        () => "openai",
+        () => "gpt-5.6-sol",
+      );
+      await expect(
+        tool.execute(
+          { task: "Recurse again." },
+          { signal: new AbortController().signal, toolCallId: "depth-test" },
+        ),
+      ).resolves.toMatchObject({ content: expect.stringContaining("nesting limit") });
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      if (previousDepth === undefined) delete process.env[SUB_AGENT_DEPTH_ENV];
+      else process.env[SUB_AGENT_DEPTH_ENV] = previousDepth;
+    }
   });
 });
 

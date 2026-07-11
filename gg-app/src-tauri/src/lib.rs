@@ -1599,7 +1599,7 @@ const AUTH_PROVIDERS: &[ProviderMeta] = &[
     ProviderMeta {
         value: "anthropic",
         label: "Anthropic",
-        description: "Claude Opus 4.8, Fable 5, Sonnet 4.6, Haiku 4.5",
+        description: "Claude Fable 5, Opus 4.8, Sonnet 5, Haiku 4.5",
         methods: &["oauth"],
         api_key_label: None,
         api_key_base_url: None,
@@ -1608,7 +1608,7 @@ const AUTH_PROVIDERS: &[ProviderMeta] = &[
     ProviderMeta {
         value: "openai",
         label: "OpenAI",
-        description: "GPT-5.5, GPT-5.5 Pro, GPT-5.4, GPT-5.3 Codex",
+        description: "GPT-5.6 Sol, GPT-5.6 Terra, GPT-5.6 Luna, GPT-5.5",
         methods: &["oauth"],
         api_key_label: None,
         api_key_base_url: None,
@@ -1617,7 +1617,7 @@ const AUTH_PROVIDERS: &[ProviderMeta] = &[
     ProviderMeta {
         value: "gemini",
         label: "Gemini",
-        description: "Gemini 3.1 Flash Lite Preview",
+        description: "Gemini 3.1 Flash Lite, Gemini 3.5 Flash, Gemini 3.1 Pro (Preview)",
         methods: &["oauth"],
         api_key_label: None,
         api_key_base_url: None,
@@ -1635,7 +1635,7 @@ const AUTH_PROVIDERS: &[ProviderMeta] = &[
     ProviderMeta {
         value: "glm",
         label: "Z.AI (GLM)",
-        description: "GLM-5.1, GLM-4.7, GLM-4.7 Flash",
+        description: "GLM-5.2, GLM-5.1, GLM-4.7, GLM-4.7 Flash",
         methods: &["apikey"],
         api_key_label: Some("Z.AI"),
         api_key_base_url: None,
@@ -1682,7 +1682,7 @@ const AUTH_PROVIDERS: &[ProviderMeta] = &[
     ProviderMeta {
         value: "openrouter",
         label: "OpenRouter",
-        description: "Qwen3.6-Plus, multi-provider gateway",
+        description: "Multi-provider gateway",
         methods: &["apikey"],
         api_key_label: Some("OpenRouter"),
         api_key_base_url: None,
