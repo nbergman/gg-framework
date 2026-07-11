@@ -1,5 +1,17 @@
 # @kenkaiiii/ggcoder
 
+## 5.11.0
+
+### Minor Changes
+
+- Add GPT-5.6 Ultra orchestration with proactive parallel subagent delegation.
+
+### Patch Changes
+
+- @kenkaiiii/gg-ai@5.11.0
+- @kenkaiiii/gg-agent@5.11.0
+- @kenkaiiii/gg-core@5.11.0
+
 ## 5.10.1
 
 ### Patch Changes
