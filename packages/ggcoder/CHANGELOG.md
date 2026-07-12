@@ -1,5 +1,14 @@
 # @kenkaiiii/ggcoder
 
+## 5.13.2
+
+### Patch Changes
+
+- c0553e1: Bound historical tool-call arguments during compaction and stop retrying timed-out summary requests.
+  - @kenkaiiii/gg-ai@5.13.2
+  - @kenkaiiii/gg-agent@5.13.2
+  - @kenkaiiii/gg-core@5.13.2
+
 ## 5.13.1
 
 ### Patch Changes
