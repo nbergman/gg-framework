@@ -22,6 +22,15 @@ export interface ChangelogEntry {
 /** Newest first. Prepended by the `/release` flow. */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.20.0",
+    date: "2026-07-13",
+    items: [
+      "Your conversation can now move to the right expert without missing a beat. I made `General`, `Therapist`, and `Research` hand off the active chat itself, keep every message, update the agent you see, and stay switched when you come back later.",
+      "Finding your way around Chat is cleaner and faster. I rolled every conversation into one unified `Chats` list, removed the agent tabs, and made every new window begin on `Home` so Code and Chat are always one click away.",
+      "Your `Memories` view just got tighter and calmer. I replaced the confusing limits with one clear count badge, reclaimed the extra space, and stopped the table header from bouncing when you scroll.",
+    ],
+  },
+  {
     version: "0.19.0",
     date: "2026-07-13",
     items: [
