@@ -1948,10 +1948,10 @@ function App(): React.ReactElement {
                 </button>
                 <button
                   className="btn btn-sm btn-ghost"
-                  title="View and curate durable chat memories"
+                  title="View and curate chat memories and Jiwa"
                   onClick={() => setShowMemories(true)}
                 >
-                  Memories
+                  Brain
                 </button>
                 <RadioButton />
                 <WindowLayoutButton />
